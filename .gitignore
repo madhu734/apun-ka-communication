@@ -1,0 +1,8 @@
+/.env
+/pb_data/
+/private-communication.exe
+/private-communication
+/firebase.json
+/web/node_modules/
+/web/dist/
+

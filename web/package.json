@@ -1,0 +1,1 @@
+{"name":"apun-ka-communication","private":true,"type":"module","scripts":{"build":"vite build","dev":"vite"},"dependencies":{"livekit-client":"2.24.1","pocketbase":"0.29.0"},"devDependencies":{"vite":"8.3.8"}}

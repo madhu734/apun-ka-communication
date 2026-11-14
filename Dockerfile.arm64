@@ -1,0 +1,9 @@
+FROM alpine:3.24.3
+RUN apk add --no-cache ca-certificates && addgroup -g 10001 app && adduser -D -H -u 10001 -G app app
+WORKDIR /app
+COPY --chmod=0755 communication /usr/local/bin/communication
+RUN mkdir -p /app/pb_data && chown app:app /app/pb_data
+USER app
+ENTRYPOINT ["/usr/local/bin/communication"]
+CMD ["serve", "--dir=/app/pb_data", "--http=0.0.0.0:8090", "--origins=https://chat.tmadhu.me"]
+

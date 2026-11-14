@@ -1,0 +1,76 @@
+services:
+  backend:
+    build: .
+    image: apun-ka-communication-backend
+    command: [serve, --dir=/app/pb_data, --http=0.0.0.0:8090, --origins=https://chat.tmadhu.me, --encryptionEnv=PB_SETTINGS_KEY]
+    restart: unless-stopped
+    env_file:
+      - path: /opt/private-communication/backend.env
+        required: false
+    environment:
+      APP_WEB_DIR: /app/web
+      APP_PROXY_CIDR: ${APP_PROXY_CIDR:-172.16.16.11/32}
+    networks: [default, proxy]
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.tcp.routers.private-comms-pb.entrypoints=https
+      - traefik.tcp.routers.private-comms-pb.rule=HostSNI(`pb.tmadhu.me`)
+      - traefik.tcp.routers.private-comms-pb.tls=true
+      - traefik.tcp.routers.private-comms-pb.tls.certresolver=letsencrypt
+      - traefik.tcp.routers.private-comms-pb.service=private-comms-pb
+      - traefik.tcp.services.private-comms-pb.loadbalancer.server.port=8090
+      - traefik.tcp.services.private-comms-pb.loadbalancer.proxyprotocol.version=2
+      - traefik.http.routers.apun-comms-web.entrypoints=https
+      - traefik.http.routers.apun-comms-web.rule=Host(`chat.tmadhu.me`)
+      - traefik.http.routers.apun-comms-web.tls=true
+      - traefik.http.routers.apun-comms-web.tls.certresolver=letsencrypt
+      - traefik.http.routers.apun-comms-web.service=apun-comms-web
+      - traefik.http.services.apun-comms-web.loadbalancer.server.port=8090
+    volumes:
+      - /opt/private-communication/pb_data:/app/pb_data
+      - /opt/private-communication/firebase:/run/firebase:ro
+    expose:
+      - '8090'
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, 'http://127.0.0.1:8090/api/app/health']
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  livekit:
+    image: livekit/livekit-server:v1.13.11@sha256:b3d5e54f1b23e148cb3166d3ec56cce52e4481a98525b5f98e45f3e6148656d5
+    restart: unless-stopped
+    networks: [default, proxy]
+    env_file:
+      - path: /opt/private-communication/livekit.env
+        required: false
+    command: [--config, /etc/livekit.yaml]
+    volumes:
+      - /opt/private-communication/livekit.yaml:/etc/livekit.yaml:ro
+    expose:
+      - '7880'
+      - '443'
+    ports:
+      - '7881:7881/tcp'
+      - '7882:7882/udp'
+      - '3478:3478/udp'
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.routers.apun-comms-livekit.entrypoints=https
+      - traefik.http.routers.apun-comms-livekit.rule=Host(`lk.tmadhu.me`)
+      - traefik.http.routers.apun-comms-livekit.tls=true
+      - traefik.http.routers.apun-comms-livekit.tls.certresolver=letsencrypt
+      - traefik.http.routers.apun-comms-livekit.service=apun-comms-livekit
+      - traefik.http.services.apun-comms-livekit.loadbalancer.server.port=7880
+      - traefik.tcp.routers.private-comms-turn.entrypoints=https
+      - traefik.tcp.routers.private-comms-turn.rule=HostSNI(`turn.tmadhu.me`)
+      - traefik.tcp.routers.private-comms-turn.tls=true
+      - traefik.tcp.routers.private-comms-turn.tls.certresolver=letsencrypt
+      - traefik.tcp.routers.private-comms-turn.service=private-comms-turn
+      - traefik.tcp.services.private-comms-turn.loadbalancer.server.port=443
+
+networks:
+  proxy:
+    external: true
+    name: coolify

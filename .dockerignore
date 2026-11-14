@@ -1,0 +1,13 @@
+**
+!Dockerfile
+!go.mod
+!go.sum
+!*.go
+!web/
+!web/package.json
+!web/package-lock.json
+!web/index.html
+!web/src.js
+!web/style.css
+!web/public/
+!web/public/**

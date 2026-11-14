@@ -1,0 +1,24 @@
+port: 7880
+rtc:
+  tcp_port: 7881
+  udp_port: 7882
+  use_external_ip: false
+  node_ip: 140.238.160.99
+turn:
+  enabled: true
+  domain: turn.tmadhu.me
+  tls_port: 443
+  external_tls: true
+  udp_port: 3478
+room:
+  auto_create: false
+  max_participants: 2
+  empty_timeout: 90
+  departure_timeout: 60
+webhook:
+  api_key: privatecomms
+  urls:
+    - http://backend:8090/api/app/livekit/webhook
+logging:
+  level: info
+
