@@ -1,8 +1,12 @@
 # Deployment and verification
 
+## Unified GitHub deployment
+
+Production is **Apun Ka Projects → goriber saas → Apun Ka Communication** in Coolify. It deploys the public repository's `main` branch via a signed GitHub push webhook. PocketBase serves the existing website and its own admin/API. LiveKit is the second container in the same Docker Compose application. The production database, media, backups and private environment files remain under `/opt/private-communication` on the Oracle host.
+
 ## Web and account update, 15 November 2026 (Dhaka)
 
-The web app is live at [chat.tmadhu.me](https://chat.tmadhu.me) in Coolify **Apun Ka Communication Web**. The PocketBase service is running backend 1.1.1. The web client starts with a small chat bundle and loads LiveKit when entering a call.
+The web app first went live at [chat.tmadhu.me](https://chat.tmadhu.me) as a separate Coolify service. The web client starts with a small chat bundle and loads LiveKit when entering a call.
 
 | Check | Result |
 |---|---|
