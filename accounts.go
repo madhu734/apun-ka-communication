@@ -26,6 +26,22 @@ const webOrigin = "https://chat.tmadhu.me"
 
 func init() { m.Register(accountSchema, nil, "1794679200_accounts.go") }
 
+func init() { m.Register(profileSchema, nil, "1794682800_profiles.go") }
+
+func profileSchema(app core.App) error {
+	users, err := app.FindCollectionByNameOrId("users")
+	if err != nil {
+		return err
+	}
+	avatar := users.Fields.GetByName("avatar").(*core.FileField)
+	avatar.MaxSize = 3 << 20
+	avatar.MimeTypes = []string{"image/jpeg", "image/png", "image/webp", "image/gif"}
+	avatar.Thumbs = []string{"96x96", "192x192"}
+	avatar.Protected = true
+	users.ViewRule = ptr("id = @request.auth.id || (@request.context = 'protectedFile' && @request.auth.id != '' && conversations_via_members.members.id ?= @request.auth.id)")
+	return app.Save(users)
+}
+
 func accountSchema(app core.App) error {
 	users, err := app.FindCollectionByNameOrId("users")
 	if err != nil {
@@ -70,7 +86,7 @@ func (s *service) accountRoutes(e *core.ServeEvent) {
 			return event.Next()
 		}
 		device := event.Request.Header.Get("X-App-Device")
-		if len(device) < 24 || len(device) > 128 {
+		if !validDevice(device) {
 			return event.BadRequestError("A valid installation ID is required.", nil)
 		}
 		var previous []*core.Record
@@ -130,6 +146,7 @@ func (s *service) accountRoutes(e *core.ServeEvent) {
 	})
 	auth.POST("/history/request", s.requestCode("history"))
 	auth.POST("/history/confirm", s.confirmCode("history"))
+	auth.POST("/password", s.changePassword)
 	auth.POST("/logout", func(e *core.RequestEvent) error {
 		err := s.app.RunInTransaction(func(tx core.App) error {
 			u, err := tx.FindRecordById("users", e.Auth.Id)
@@ -147,8 +164,77 @@ func (s *service) accountRoutes(e *core.ServeEvent) {
 		}
 		return e.NoContent(204)
 	})
+	e.Router.POST("/api/app/account/register", s.registerAccount)
 	e.Router.POST("/api/app/account/recovery/request", s.requestCode("recovery"))
 	e.Router.POST("/api/app/account/recovery/confirm", s.confirmCode("recovery"))
+}
+
+type newPassword struct {
+	Password        string `json:"password"`
+	PasswordConfirm string `json:"passwordConfirm"`
+}
+
+func (p newPassword) valid() bool {
+	return len(p.Password) >= 8 && len(p.Password) <= 72 && p.Password == p.PasswordConfirm
+}
+
+func validDevice(device string) bool {
+	return len(device) >= 24 && len(device) <= 128
+}
+
+func (s *service) registerAccount(e *core.RequestEvent) error {
+	var body struct {
+		newPassword
+		Email string `json:"email"`
+		Name  string `json:"name"`
+	}
+	device := e.Request.Header.Get("X-App-Device")
+	if e.BindBody(&body) != nil || !validDevice(device) || !body.valid() {
+		return e.BadRequestError("Enter a matching password of 8 to 72 bytes and try again.", nil)
+	}
+	email := strings.ToLower(strings.TrimSpace(body.Email))
+	name := strings.TrimSpace(body.Name)
+	address, err := mail.ParseAddress(email)
+	if name == "" || len([]rune(name)) > 80 || err != nil || address.Address != email {
+		return e.BadRequestError("Enter a display name and a valid email address.", nil)
+	}
+	user, err := newRow(s.app, "users")
+	if err != nil {
+		return apiError(e, err)
+	}
+	user.SetEmail(email)
+	user.SetPassword(body.Password)
+	user.Set("name", name)
+	user.Set("current_device", device)
+	if err := s.app.Save(user); err != nil {
+		return e.BadRequestError("Could not create an account with this email address.", err)
+	}
+	return apis.RecordAuthResponse(e, user, "", nil)
+}
+
+func (s *service) changePassword(e *core.RequestEvent) error {
+	var body newPassword
+	if e.BindBody(&body) != nil || !body.valid() {
+		return e.BadRequestError("Enter a matching password of 8 to 72 bytes.", nil)
+	}
+	var user *core.Record
+	err := s.app.RunInTransaction(func(tx core.App) error {
+		var err error
+		user, err = tx.FindRecordById("users", e.Auth.Id)
+		if err != nil {
+			return err
+		}
+		if user.TokenKey() != e.Auth.TokenKey() {
+			return errConflict
+		}
+		user.SetPassword(body.Password)
+		user.SetTokenKey(security.RandomString(50))
+		return tx.Save(user)
+	})
+	if err != nil {
+		return apiError(e, err)
+	}
+	return apis.RecordAuthResponse(e, user, "", nil)
 }
 
 func (s *service) codeDigest(id, purpose, code string) string {

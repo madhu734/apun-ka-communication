@@ -25,7 +25,7 @@ func (s *service) people(e *core.RequestEvent) error {
 		if err != nil {
 			return apiError(e, err)
 		}
-		people = append(people, map[string]string{"id": id, "name": user.GetString("name")})
+		people = append(people, map[string]string{"id": id, "name": user.GetString("name"), "avatar": user.GetString("avatar")})
 	}
 	return e.JSON(200, people)
 }

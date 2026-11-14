@@ -1,7 +1,7 @@
 import PocketBase from 'pocketbase';
 import './style.css';
 
-const pb=new PocketBase('https://pb.tmadhu.me');
+const pb=new PocketBase(import.meta.env.VITE_PB_URL||'https://pb.tmadhu.me');
 pb.autoCancellation(false);
 const device=localStorage.akDevice||(localStorage.akDevice=crypto.randomUUID());
 const $=id=>document.getElementById(id);
@@ -14,50 +14,79 @@ const usr=()=>pb.authStore.record?.id;
 const api=(path,method='GET',body)=>pb.send('/api/app'+path,{method,body});
 const col=name=>pb.collection(name);
 const value=(id)=>$(id).value.trim();
+const deviceHeaders={'X-App-Device':device};
 let toastTimer,heartbeat,typingTimer,conversation,conversationList=[],people={},messages=new Map(),reactions=[],membership=[],subscriptionOff=[],call,room,callDialogBusy=false,historyLocked=false,reply,attachment,recording,qualityTimer,notificationDevice,pendingSend,older=true;
 let mediaUrls=[];
 function toast(text){$('toast').textContent=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').textContent='',4500)}
 function reason(e){return e?.response?.message||e?.message||'Please try again.'}
 function button(id,fn){const el=$(id);if(el)el.onclick=async()=>{try{await fn()}catch(e){toast(reason(e))}}}
 function form(id,fn){const el=$(id);el.onsubmit=async event=>{event.preventDefault();const b=el.querySelector('[type=submit]');if(b)b.disabled=true;el.querySelector('.error')?.replaceChildren();try{await fn()}catch(e){const box=el.querySelector('.error');if(box)box.textContent=reason(e);else toast(reason(e))}finally{if(b)b.disabled=false}}}
-function field(label,id,type='text',extra=''){return `<label>${label}<input id="${id}" type="${type}" required ${extra}></label>`}
+const eye='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/><path class="eye-slash" d="m4 4 16 16"/></svg>';
+function field(label,id,type='text',extra=''){
+ const input=`<input id="${id}" type="${type}" required ${extra}>`;
+ if(type!=='password')return `<label for="${id}">${label}${input}</label>`;
+ return `<div class="password-field"><label for="${id}">${label}</label><div class="password-input">${input}<button type="button" data-password="${id}" aria-label="Show password" aria-pressed="false">${eye}</button></div></div>`;
+}
+app.addEventListener('click',event=>{
+ const toggle=event.target.closest('[data-password]');
+ if(!toggle)return;
+ const input=$(toggle.dataset.password),show=input.type==='password';
+ input.type=show?'text':'password';
+ toggle.setAttribute('aria-pressed',String(show));
+ toggle.setAttribute('aria-label',show?'Hide password':'Show password');
+});
 function submit(label){return `<button class="primary" type="submit">${label}</button><div class="error" role="alert"></div>`}
 const emailField=()=>field('Email address','email','email','autocomplete="username"');
 const passFields=()=>field('New password','pw','password','minlength="8" autocomplete="new-password"')+field('Confirm password','pw2','password','minlength="8" autocomplete="new-password"');
+function confirmedPassword(){
+ const password=$('pw').value,passwordConfirm=$('pw2').value;
+ if(password!==passwordConfirm)throw Error('The passwords do not match.');
+ if(new TextEncoder().encode(password).length>72)throw Error('Choose a shorter password.');
+ return {password,passwordConfirm};
+}
 const codeField=()=>field('Six-digit code','code','text','inputmode="numeric" pattern="[0-9]{6}" autocomplete="one-time-code"');
 const currentPass=()=>field('Current password','pw','password','autocomplete="current-password"');
 const getHash=()=>location.hash.slice(1);
 function gate(mode='login',token=''){
- const titles={login:'Welcome back',forgot:'Recover your account',otp:'Enter your recovery code',sent:'Check your inbox',reset:'Choose a new password',email:'Confirm your new email'};
- const description={login:'Sign in to your private conversations.',forgot:'Choose how you want to reset your password.',otp:'Enter the code from your email and choose a new password.',sent:'If the address belongs to an account, a reset link should arrive shortly.',reset:'Your new password will sign out the previous session.',email:'Enter your current password to finish changing your email address.'};
- app.innerHTML=`<section class="gate"><div class="intro">${logo}<div><h1>Good to<br> <em>hear from you.</em></h1><p>A private place to chat, catch up and call your people.</p></div><small>Private by invitation</small><div class="rings"></div></div><div class="entry"><section class="panel"><h2>${titles[mode]}</h2><p>${description[mode]}</p><form id="authform"></form>${mode==='login'?'<button class="link" id="forgot">Forgot your password?</button>':'<button class="link" id="back">Back to sign in</button>'}</section></div></section>`;
+ const titles={login:'Welcome back',signup:'Create your account',forgot:'Recover your account',otp:'Enter your recovery code',sent:'Check your inbox',reset:'Choose a new password',email:'Confirm your new email'};
+ const description={login:'Sign in to your private conversations.',signup:'Use an email address you can access for account recovery.',forgot:'Choose how you want to reset your password.',otp:'Enter the code from your email and choose a new password.',sent:'If the address belongs to an account, a reset link should arrive shortly.',reset:'Your new password will sign out the previous session.',email:'Enter your current password to finish changing your email address.'};
+ app.innerHTML=`<section class="gate"><div class="intro">${logo}<div><h1>Good to<br> <em>hear from you.</em></h1><p>A private place to chat, catch up and call your people.</p></div><div class="rings"></div></div><div class="entry"><section class="panel"><h2>${titles[mode]}</h2><p>${description[mode]}</p><form id="authform"></form><div class="gate-links">${mode==='login'?'<button class="link" id="forgot">Forgot your password?</button><button class="link" id="signup">Create an account</button>':'<button class="link" id="back">Back to sign in</button>'}</div></section></div></section>`;
  const f=$('authform');
  if(mode==='login'){
   f.innerHTML=emailField()+field('Password','pw','password','autocomplete="current-password"')+submit('Sign in');
-  form('authform',async()=>{await col('users').authWithPassword(value('email'),$('pw').value,{headers:{'X-App-Device':device}});await shell()});
+  form('authform',async()=>{await col('users').authWithPassword(value('email'),$('pw').value,{headers:deviceHeaders});await shell()});
+ }else if(mode==='signup'){
+  f.innerHTML=field('Display name','displayName','text','maxlength="80" autocomplete="name"')+emailField()+passFields()+submit('Create account');
+  form('authform',async()=>{
+   const body={email:value('email'),name:value('displayName'),...confirmedPassword()};
+   const result=await pb.send('/api/app/account/register',{method:'POST',body,headers:deviceHeaders});
+   pb.authStore.save(result.token,result.record);
+   await shell();
+  });
  }else if(mode==='forgot'){
   f.innerHTML=emailField()+'<label>Send me a<select id="method"><option value="link">Password reset link</option><option value="otp">Six-digit recovery code</option></select></label>'+submit('Send recovery email');
   form('authform',async()=>{const email=value('email');if(value('method')==='link'){await col('users').requestPasswordReset(email);gate('sent')}else{await api('/account/recovery/request','POST',{email});gate('otp');$('email').value=email}});
  }else if(mode==='otp'){
   f.innerHTML=emailField()+codeField()+passFields()+submit('Reset password');
-  form('authform',async()=>{await api('/account/recovery/confirm','POST',{email:value('email'),code:value('code'),password:$('pw').value,passwordConfirm:$('pw2').value});pb.authStore.clear();gate();toast('Password reset. Sign in with your new password.')});
+  form('authform',async()=>{await api('/account/recovery/confirm','POST',{email:value('email'),code:value('code'),...confirmedPassword()});pb.authStore.clear();gate();toast('Password reset. Sign in with your new password.')});
  }else if(mode==='reset'||mode==='email'){
   f.innerHTML=(mode==='reset'?passFields():currentPass())+submit(mode==='reset'?'Reset password':'Confirm email');
-  form('authform',async()=>{if(mode==='reset')await col('users').confirmPasswordReset(token,$('pw').value,$('pw2').value);else await col('users').confirmEmailChange(token,$('pw').value);history.replaceState(null,'','/');pb.authStore.clear();gate();toast(mode==='reset'?'Password reset. Sign in with your new password.':'Email changed. Sign in with your new address.')});
+  form('authform',async()=>{if(mode==='reset'){const {password,passwordConfirm}=confirmedPassword();await col('users').confirmPasswordReset(token,password,passwordConfirm)}else await col('users').confirmEmailChange(token,$('pw').value);history.replaceState(null,'','/');pb.authStore.clear();gate();toast(mode==='reset'?'Password reset. Sign in with your new password.':'Email changed. Sign in with your new address.')});
  }else f.hidden=true;
- button('forgot',()=>gate('forgot'));button('back',()=>{history.replaceState(null,'','/');if(pb.authStore.isValid)return shell();gate()});
+ button('signup',()=>gate('signup'));button('forgot',()=>gate('forgot'));button('back',()=>{history.replaceState(null,'','/');if(pb.authStore.isValid)return shell();gate()});
 }
 
 async function signout(remote=false){if(!remote){try{if(notificationDevice)await api('/devices/'+notificationDevice,'DELETE');await api('/account/logout','POST',{})}catch(e){if(e.status!==401)toast(reason(e))}}
  clearInterval(heartbeat);clearTimeout(typingTimer);clearTimeout(qualityTimer);for(const off of subscriptionOff)off();subscriptionOff=[];await stopMedia();
  if(recording?.state==='recording'){recording.onstop=()=>recording.stream.getTracks().forEach(t=>t.stop());recording.stop()}
- fileToken='';fileTokenAt=0;
+ fileToken='';fileTokenAt=0;fileTokenRequest=null;
  for(const url of mediaUrls)URL.revokeObjectURL(url);mediaUrls=[];conversation=null;messages.clear();call=null;pendingSend=null;reply=null;attachment=null;notificationDevice=null;
  pb.authStore.clear();gate();if(remote)toast('Your session ended. If you signed in on another device, use that device to continue.');
 }
 
 async function shell(){
  app.innerHTML=`<section class="shell"><aside class="side">${logo}<div><h2>Chats</h2><div id="contacts" class="contacts"></div></div><button class="me" id="settings"><span class="circle">⚙</span><span class="name">Account<span class="sub">Settings</span></span></button></aside><section class="pane"><header class="bar"><span class="circle" id="avatar">–</span><div><strong id="peer">Conversations</strong><span id="status" class="sub">Connecting…</span></div><div class="actions">${icon('audio','phone','Start audio call')}${icon('video','video','Start video call')}</div></header><div id="history" hidden><span>Earlier messages are locked on this device.</span><button id="unlock" class="link">Unlock history</button></div><div id="timeline" class="timeline" aria-label="Messages"></div><form id="composer" class="composer"><div id="pending"></div><div class="compose-row">${icon('attach','attach','Attach media')}${icon('voice','mic','Record voice note')}<input id="file" type="file" accept="image/jpeg,image/png,image/webp,audio/*,video/mp4,video/webm" hidden><textarea id="text" aria-label="Message" placeholder="Write a message…" rows="1"></textarea><button class="primary" type="submit">Send</button></div></form></section></section><dialog id="modal"></dialog><section id="call" hidden aria-label="Active call"></section>`;
+ renderOwnProfile();
  button('settings',settings);button('unlock',unlock);button('audio',()=>startCall('audio'));button('video',()=>startCall('video'));button('attach',()=>$('file').click());button('voice',voice);
  for(const control of $('composer').querySelectorAll('button,textarea'))control.disabled=true;
  $('file').onchange=()=>{const file=$('file').files[0];if(file?.size>50*1024*1024){toast('Choose a file under 50 MiB.');return}attachment=file;renderPending()};
@@ -72,7 +101,7 @@ async function loadConversations(){
  try{
   const session=await api('/account/session');historyLocked=session.historyLocked;$('history').hidden=!historyLocked;
   conversationList=await col('conversations').getFullList();
-  people=Object.fromEntries(await Promise.all(conversationList.map(async c=>{const rows=await api('/conversations/'+c.id+'/people');return [c.id,rows.find(p=>p.id!==usr())?.name||'Conversation']})));
+  people=Object.fromEntries(await Promise.all(conversationList.map(async c=>{const rows=await api('/conversations/'+c.id+'/people');return [c.id,rows.find(p=>p.id!==usr())]})));
   renderContacts();
   if(conversationList[0])await select(conversationList[0].id);
   else{$('timeline').innerHTML='<div class="empty"><img src="/mark.svg" alt=""><h3>No conversations yet</h3><p>Your administrator can pair your account with another member.</p></div>';$('composer').hidden=true;$('status').textContent='Connected'}
@@ -82,9 +111,44 @@ async function loadConversations(){
   $('timeline').dataset.ready='true';
  }catch(e){if(e.status===401||e.status===403)return signout(true);$('status').textContent='Connection interrupted';toast(reason(e))}
 }
-function initials(n){return (n||'?').trim().split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase()}
-function renderContacts(){$('contacts').innerHTML=conversationList.map(c=>`<button class="contact ${conversation===c.id?'active':''}" data-id="${c.id}"><span class="circle">${escape(initials(people[c.id]))}</span><span>${escape(people[c.id])}</span></button>`).join('');$('contacts').querySelectorAll('button').forEach(b=>b.onclick=()=>select(b.dataset.id).catch(e=>toast(reason(e))))}
-async function select(id){conversation=id;messages.clear();reply=null;attachment=null;pendingSend=null;older=true;renderPending();renderContacts();$('peer').textContent=people[id];$('avatar').textContent=initials(people[id]);await sync();await refreshCall()}
+const personName=(person,fallback='Conversation')=>person?.name?.trim()||fallback;
+function initials(name){return name.trim().split(/\s+/).slice(0,2).map(word=>Array.from(word)[0]).join('').toUpperCase()}
+function showAvatar(circle,person,name,thumb='96x96'){
+ circle.textContent=initials(name);
+ if(!person?.avatar)return;
+ const label=circle.textContent;
+ fileAccessToken().then(token=>{
+  if(!circle.isConnected||circle.textContent!==label)return;
+  const image=new Image();
+  image.alt='';
+  image.referrerPolicy='no-referrer';
+  image.onload=()=>{if(circle.isConnected&&circle.textContent===label)circle.replaceChildren(image)};
+  image.src=pb.files.getURL({collectionName:'users',id:person.id},person.avatar,{token,thumb});
+ }).catch(()=>{});
+}
+function renderOwnProfile(){
+ const me=pb.authStore.record, name=personName(me,'Account'), settings=$('settings');
+ settings.setAttribute('aria-label','Account settings');
+ settings.innerHTML=`<span class="circle"></span><span class="name">${escape(name)}<span class="sub">Settings</span></span>`;
+ showAvatar(settings.querySelector('.circle'),me,name);
+}
+function renderContacts(){
+ const list=$('contacts');
+ list.innerHTML=conversationList.map(c=>`<button class="contact ${conversation===c.id?'active':''}" data-id="${c.id}"><span class="circle"></span><span>${escape(personName(people[c.id]))}</span></button>`).join('');
+ list.querySelectorAll('button').forEach(b=>{
+  const person=people[b.dataset.id];
+  showAvatar(b.firstElementChild,person,personName(person));
+  b.onclick=()=>select(b.dataset.id).catch(e=>toast(reason(e)));
+ });
+}
+async function select(id){
+ conversation=id;messages.clear();reactions=[];membership=[];reply=null;attachment=null;pendingSend=null;older=true;
+ renderPending();renderContacts();
+ const name=personName(people[id]),oldAvatar=$('avatar'),avatar=oldAvatar.cloneNode(false);
+ oldAvatar.replaceWith(avatar);
+ $('peer').textContent=name;showAvatar(avatar,people[id],name);
+ await sync();await refreshCall();
+}
 const filter=id=>pb.filter('conversation = {:id}',{id});
 async function historyPage(mode='latest'){
  const id=conversation;
@@ -113,17 +177,39 @@ async function sync(){
  const id=conversation;if(!id)return;
  await catchUp(id);
  await historyPage();
- const [r,m]=await Promise.all([col('message_reactions').getList(1,150,{filter:filter(id),sort:'-updated',skipTotal:true}),col('conversation_members').getFullList({filter:filter(id)})]);
+ const [r,m]=await Promise.all([loadReactions(id),col('conversation_members').getFullList({filter:filter(id)})]);
  if(conversation!==id)return;
- reactions=r.items;membership=m;render(true);markRead();
+ reactions=r;membership=m;render(true);markRead();
 }
 function ordered(){return [...messages.values()].sort((a,b)=>a.created.localeCompare(b.created)||a.id.localeCompare(b.id))}
+async function loadReactions(id){
+ const first=ordered()[0];
+ if(!first)return [];
+ return col('message_reactions').getFullList({filter:filter(id)+' && '+pb.filter('message.created >= {:first}',{first:first.created})});
+}
+const commonReactions=[['👍','Like'],['👎','Dislike'],['❤️','Love'],['😂','Haha'],['😮','Wow'],['😢','Sad'],['😡','Angry']];
+const emojiPattern=/^(?:\p{Regional_Indicator}{2}|[0-9#*]\uFE0F?\u20E3|\p{Extended_Pictographic}[\uFE0F\p{Emoji_Modifier}\u{E0020}-\u{E007F}]*(?:\u200D\p{Extended_Pictographic}[\uFE0F\p{Emoji_Modifier}\u{E0020}-\u{E007F}]*)*)$/u;
+function reactionChips(rows){
+ const groups=new Map();
+ for(const row of rows){
+  const group=groups.get(row.emoji)||{count:0,mine:false};
+  group.count++;
+  group.mine||=row.user===usr();
+  groups.set(row.emoji,group);
+ }
+ return [...groups].map(([emoji,{count,mine}])=>`<button type="button" class="reaction-chip" data-op="choose-reaction" data-emoji="${escape(emoji)}" aria-pressed="${mine}" aria-label="${escape(emoji)} ${count} ${count===1?'reaction':'reactions'}">${escape(emoji)} ${count}</button>`).join('');
+}
 function render(stick=false){
  const box=$('timeline');if(!box)return;
  const bottom=stick||box.scrollHeight-box.scrollTop-box.clientHeight<100;
  const scroll=box.scrollTop;
  const previous=box.scrollHeight;
  const items=ordered();
+ const byMessage=new Map();
+ for(const row of reactions){
+  if(!byMessage.has(row.message))byMessage.set(row.message,[]);
+  byMessage.get(row.message).push(row);
+ }
  const near=membership.find(x=>x.user!==usr());
  if(near){
   const now=Date.now();
@@ -133,23 +219,64 @@ function render(stick=false){
   const own=m.sender===usr(),last=near&&(m.created<near.read_through||m.created===near.read_through&&m.id<=near.read_id);
   const clock=new Date(m.created).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
   const replyMsg=messages.get(m.reply_to);
-  return `<article class="message ${own?'self':''}" data-id="${m.id}">${m.reply_to?`<div class="replyline">${escape(replyMsg?.text||'Earlier message')}</div>`:''}${m.kind==='image'?`<button data-op="file"><img data-preview="${m.id}" alt="Shared image" loading="lazy"></button>`:m.attachment?`<button class="link" data-op="file">${m.kind==='voice'?'Play voice note':'Play video'}</button>`:''}<p>${escape(m.text)}</p><div class="bubble-actions"><small>${escape(clock)}${own&&last?' · Read':''}</small><button data-op="reply">Reply</button>${own?'<button data-op="edit">Edit</button>':''}<button data-op="react" aria-label="React with a heart">♥ ${reactions.filter(r=>r.message===m.id).map(r=>escape(r.emoji)).join(' ')}</button></div></article>`
+  return `<article class="message ${own?'self':''}" data-id="${m.id}">${m.reply_to?`<div class="replyline">${escape(replyMsg?.text||'Earlier message')}</div>`:''}${m.kind==='image'?`<button data-op="file"><img data-preview="${m.id}" alt="Shared image" loading="lazy"></button>`:m.attachment?`<button class="link" data-op="file">${m.kind==='voice'?'Play voice note':'Play video'}</button>`:''}<p>${escape(m.text)}</p><div class="bubble-actions"><small>${escape(clock)}${own&&last?' · Read':''}</small><button data-op="reply">Reply</button>${own?'<button data-op="edit">Edit</button>':''}<button data-op="react" aria-label="Add reaction">React</button></div>${byMessage.has(m.id)?`<div class="reaction-chips">${reactionChips(byMessage.get(m.id))}</div>`:''}</article>`
  }).join(''):'<div class="empty"><img src="/mark.svg" alt=""><h3>Say hello</h3><p>Send a message, share a voice note or start a call.</p></div>');
- button('older',async()=>{await historyPage('older');render();box.scrollTop=scroll+box.scrollHeight-previous});
- box.onclick=e=>{const target=e.target.closest('[data-op]');if(target)chatAction(target.dataset.op,target.closest('[data-id]').dataset.id).catch(err=>toast(reason(err)))};
+ button('older',async()=>{const id=conversation;await historyPage('older');const rows=await loadReactions(id);if(id!==conversation)return;reactions=rows;render();box.scrollTop=scroll+box.scrollHeight-previous});
+ box.onclick=e=>{const target=e.target.closest('[data-op]');if(target)chatAction(target.dataset.op,target.closest('[data-id]').dataset.id,target.dataset.emoji).catch(err=>toast(reason(err)))};
  if(bottom)box.scrollTop=box.scrollHeight;else box.scrollTop=scroll;
  if(items.some(x=>x.kind==='image'))loadPreviews(box);
- const overlay=$('recent');if(overlay)overlay.innerHTML=items.slice(-3).map(x=>`<p><b>${x.sender===usr()?'You':escape(people[conversation])}</b> ${escape(x.text||x.kind)}</p>`).join('');
+ const overlay=$('recent');if(overlay)overlay.innerHTML=items.slice(-3).map(x=>`<p><b>${x.sender===usr()?'You':escape(personName(people[conversation]))}</b> ${escape(x.text||x.kind)}</p>`).join('');
 }
-let fileToken='',fileTokenAt=0;
-async function fileURL(m,thumb){if(Date.now()-fileTokenAt>65000||!fileToken){fileToken=await pb.files.getToken();fileTokenAt=Date.now()}return pb.files.getURL(m,m.attachment,{token:fileToken,...(thumb?{thumb:'400x0'}:{})})}
+let fileToken='',fileTokenAt=0,fileTokenRequest;
+async function fileAccessToken(){
+ if(fileToken&&Date.now()-fileTokenAt<65000)return fileToken;
+ if(!fileTokenRequest){
+  const authToken=pb.authStore.token;
+  const request=pb.files.getToken().then(token=>{
+   if(pb.authStore.token===authToken){fileToken=token;fileTokenAt=Date.now()}
+   return token;
+  }).finally(()=>{if(fileTokenRequest===request)fileTokenRequest=null});
+  fileTokenRequest=request;
+ }
+ return fileTokenRequest;
+}
+async function fileURL(m,thumb){return pb.files.getURL(m,m.attachment,{token:await fileAccessToken(),...(thumb?{thumb:'400x0'}:{})})}
 async function loadPreviews(box){for(const img of box.querySelectorAll('[data-preview]')){try{const url=await fileURL(messages.get(img.dataset.preview),true);if(img.isConnected)img.src=url}catch{}}}
-async function chatAction(op,id){
+async function chatAction(op,id,emoji){
  const m=messages.get(id);if(!m)return;
  if(op==='reply'){reply=m;renderPending();$('text').focus();return}
  if(op==='edit'){modal('Edit message',`<label>Message<textarea id="editText" required></textarea></label>`+submit('Save edit'),async()=>{const result=await api('/messages/'+id,'PATCH',{text:value('editText')});messages.set(id,result);$('modal').close();render()});$('editText').value=m.text;return}
- if(op==='react'){await api('/reactions/'+id,'PUT',{emoji:reactions.some(x=>x.message===id&&x.user===usr())?'':'❤️'});return}
+ if(op==='react'){reactionPicker(id);return}
+ if(op==='choose-reaction'){await setReaction(id,emoji);return}
  if(op==='file'){const src=escape(await fileURL(m,false));modal('Attachment',m.kind==='image'?`<img style="width:100%" src="${src}" alt="Shared image">`:m.kind==='voice'?`<audio controls autoplay src="${src}"></audio>`:`<video controls autoplay style="width:100%" src="${src}"></video>`)}
+}
+function reactionPicker(id){
+ const mine=reactions.find(row=>row.message===id&&row.user===usr())?.emoji;
+ modal('React to message',`<div class="emoji-picker">${commonReactions.map(([emoji,label],i)=>`<button type="button" id="emoji-${i}" title="${label}" aria-label="${label}" aria-pressed="${emoji===mine}">${emoji}</button>`).join('')}</div>
+ ${field('Use your keyboard’s emoji picker','customEmoji','text','maxlength="48" placeholder="Add an emoji"')}
+ ${submit('React')}${mine?'<button type="button" class="link" id="removeReaction">Remove my reaction</button>':''}`,async()=>{
+  const emoji=value('customEmoji');
+  if(!emojiPattern.test(emoji)||Array.from(emoji).length>24)throw Error('Enter one emoji.');
+  await setReaction(id,emoji);
+  $('modal').close();
+ });
+ commonReactions.forEach(([emoji],i)=>button('emoji-'+i,async()=>{await setReaction(id,emoji);$('modal').close()}));
+ button('removeReaction',async()=>{await setReaction(id,'');$('modal').close()});
+}
+const pendingReactions=new Set();
+async function setReaction(id,emoji){
+ if(pendingReactions.has(id))return;
+ const owner=usr(),current=conversation;
+ const query=pb.filter('message = {:id} && user = {:user}',{id,user:owner});
+ const mine=reactions.find(row=>row.message===id&&row.user===owner)?.emoji;
+ pendingReactions.add(id);
+ try{
+  await api('/reactions/'+id,'PUT',{emoji:emoji===mine?'':emoji});
+  const {items}=await col('message_reactions').getList(1,1,{filter:query,skipTotal:true});
+  if(conversation!==current||usr()!==owner)return;
+  reactions=reactions.filter(row=>row.message!==id||row.user!==owner).concat(items);
+  render();
+ }finally{pendingReactions.delete(id)}
 }
 function renderPending(){$('pending').innerHTML=(reply?`<div class="notice">Replying to ${escape((reply.text||reply.kind).slice(0,90))} <button id="clearReply" type="button" class="link">Remove</button></div>`:'')+(attachment?`<div class="notice">${escape(attachment.name)} <button id="clearFile" type="button" class="link">Remove</button></div>`:'');button('clearReply',()=>{reply=null;renderPending()});button('clearFile',()=>{attachment=null;$('file').value='';renderPending()})}
 async function send(text,inCall){
@@ -167,13 +294,13 @@ async function send(text,inCall){
 }
 let readKey;
 function markRead(){if(document.hidden||!conversation)return;const list=ordered();const last=list.at(-1);if(last&&last.id!==readKey){readKey=last.id;api('/conversations/'+conversation+'/read','PUT',{message:last.id}).catch(()=>readKey=null)}}
-let syncing=false;
-async function tick(){if(syncing||!usr()||!$('timeline'))return;syncing=true;try{
+let syncing=false,changingPassword=false;
+async function tick(){if(syncing||changingPassword||!usr()||!$('timeline'))return;const token=pb.authStore.token;syncing=true;try{
  const s=await api('/account/session');if(historyLocked!==s.historyLocked){historyLocked=s.historyLocked;$('history').hidden=!historyLocked;messages.clear();await sync()}
  if(!subscriptionOff.length){await loadConversations();return}
  if(conversation&&!document.hidden)await api('/conversations/'+conversation+'/presence','PUT',{typing:false});
  if(conversation){if(!pb.realtime.isConnected)await sync();await refreshCall()}
-}catch(e){if(e.status===401||e.status===403)await signout(true)}finally{syncing=false}}
+}catch(e){if((e.status===401||e.status===403)&&token===pb.authStore.token&&!changingPassword)await signout(true)}finally{syncing=false}}
 async function subscribe(){
  for(const off of subscriptionOff)off();subscriptionOff=[];
  try{for(const n of ['messages','conversation_members','message_reactions','calls']){
@@ -191,7 +318,68 @@ function modal(title,fields,action){
  d.innerHTML=`<div class="row"><h2 style="flex:1">${escape(title)}</h2><button type="button" id="closeModal" aria-label="Close">✕</button></div><form id="dialogForm">${fields}</form>`;
  button('closeModal',()=>d.close());if(action)form('dialogForm',action);d.showModal();
 }
-function settings(){modal('Account',`<p class="notice">${escape(pb.authStore.record.email||'')}</p><button type="button" id="emailChange" class="primary">Change email</button><button type="button" class="link" id="notify">Enable browser notifications</button><button type="button" id="logout" class="link danger">Sign out</button>`);button('logout',()=>signout());button('notify',push);button('emailChange',()=>modal('Change your email',field('New email address','newEmail','email')+submit('Send confirmation link'),async()=>{await col('users').requestEmailChange(value('newEmail'));$('modal').close();toast('Confirmation link sent to your new email.')}))}
+function settings(){
+ const me=pb.authStore.record;
+ modal('Account',`<div class="account-profile"><span class="circle" id="accountAvatar"></span><div><strong>${escape(personName(me,'Your profile'))}</strong><span class="sub">${escape(me.email)}</span></div></div>
+ <div class="account-actions"><button type="button" id="profileEdit">Edit profile</button><button type="button" id="emailChange">Change email</button><button type="button" id="passwordChange">Change password</button><button type="button" id="notify">Enable browser notifications</button><button type="button" class="danger" id="logout">Sign out</button></div>`);
+ showAvatar($('accountAvatar'),me,personName(me,'Your profile'),'192x192');
+ button('profileEdit',editProfile);
+ button('logout',()=>signout());
+ button('notify',push);
+ button('emailChange',()=>modal('Change your email',field('New email address','newEmail','email')+submit('Send confirmation link'),async()=>{
+  await col('users').requestEmailChange(value('newEmail'));$('modal').close();toast('Confirmation link sent to your new email.');
+ }));
+ button('passwordChange',()=>modal('Change your password',passFields()+submit('Save new password'),async()=>{
+  changingPassword=true;
+  try{
+   const result=await api('/account/password','POST',confirmedPassword());
+   pb.authStore.save(result.token,result.record);
+   fileToken='';fileTokenRequest=null;
+   $('modal').close();
+  }finally{changingPassword=false}
+  toast('Password updated.');
+  try{await subscribe();await sync()}catch(e){toast(reason(e))}
+ }));
+}
+function editProfile(){
+ const me=pb.authStore.record;
+ modal('Edit profile',`<div class="account-profile"><span class="circle" id="avatarPreview"></span><div><strong>Profile picture</strong><span class="sub">JPG, PNG, WebP or GIF · up to 3 MiB</span></div></div>
+ <label for="profilePhoto">Choose a picture<input id="profilePhoto" type="file" accept="image/jpeg,image/png,image/webp,image/gif"></label>
+ ${me.avatar?'<label class="remove-photo"><input type="checkbox" id="removePhoto"> Remove current picture</label>':''}
+ ${field('Display name','profileName','text','maxlength="80" autocomplete="name"')}${submit('Save profile')}`,async()=>{
+  const name=value('profileName'),photo=$('profilePhoto').files[0];
+  if(!name)throw Error('Enter a display name.');
+  if(photo?.size>3*1024*1024)throw Error('Choose a picture under 3 MiB.');
+  const data=new FormData();
+  data.set('name',name);
+  if(photo)data.set('avatar',photo);
+  else if($('removePhoto')?.checked)data.set('avatar','');
+  const updated=await col('users').update(me.id,data);
+  pb.authStore.save(pb.authStore.token,{...me,...updated});
+  renderOwnProfile();
+  settings();
+  toast('Profile updated.');
+ });
+ showAvatar($('avatarPreview'),me,personName(me,'Your profile'),'192x192');
+ $('profileName').value=me.name||'';
+ $('profilePhoto').onchange=()=>{
+  const photo=$('profilePhoto').files[0],preview=$('avatarPreview');
+  if(!photo){showAvatar(preview,me,value('profileName')||personName(me,'Your profile'));return}
+  if(photo.size>3*1024*1024){toast('Choose a picture under 3 MiB.');$('profilePhoto').value='';return}
+  if($('removePhoto'))$('removePhoto').checked=false;
+  const image=new Image(),url=URL.createObjectURL(photo);
+  image.alt='';
+  image.onload=image.onerror=()=>{
+   URL.revokeObjectURL(url);
+   if(image.naturalWidth&&$('profilePhoto')?.files[0]===photo)preview.replaceChildren(image);
+  };
+  image.src=url;
+ };
+ if($('removePhoto'))$('removePhoto').onchange=()=>{
+  if($('removePhoto').checked)$('profilePhoto').value='';
+  showAvatar($('avatarPreview'),$('removePhoto').checked?null:me,value('profileName')||personName(me,'Your profile'));
+ };
+}
 async function unlock(){modal('Unlock earlier messages','<p class="notice">We’ll send a one-time code to the email on your account.</p>'+submit('Send a code'),async()=>{await api('/account/history/request','POST',{});modal('Enter your email code',codeField()+submit('Unlock history'),async()=>{await api('/account/history/confirm','POST',{code:value('code')});$('modal').close();await tick();toast('Earlier messages unlocked.')})})}
 async function push(){
  if(!('serviceWorker' in navigator)||!('PushManager' in window))throw Error('This browser does not support Web Push.');
@@ -238,7 +426,7 @@ async function applyCall(r){
  }
  if(r.status==='ringing'&&Date.parse(r.ring_expires_at)<=Date.now())return;
  call=r;scheduledEnd(r);host.hidden=false;
- const peer=people[r.conversation]||'Your contact';
+ const peer=personName(people[r.conversation],'Your contact');
  if(r.status==='ringing'){
   const incoming=r.receiver===usr();
   renderCallId=null;
@@ -252,8 +440,14 @@ async function applyCall(r){
  }
  if(renderCallId===r.id)return;
  renderCallId=r.id;host.dataset.phase='';host.classList.remove('min');manualMode='auto';
- host.innerHTML=`<div class="callhead"><strong>${escape(peer)}</strong><span id="callState">Connecting…</span><button id="collapse" aria-label="Toggle compact call">−</button></div><div class="stage"><div id="remote"></div><div id="local"></div><form id="incallForm" class="incall" hidden><div id="recent"></div><div class="row" style="flex-wrap:nowrap"><input id="incallText" placeholder="Message during call" aria-label="Message during call"><button type="submit">Send</button></div></form></div><div id="audioMount"></div><div class="call-controls"><button id="mute">Mic on</button><button id="camera">Camera</button><button id="flip">Flip</button><button id="share">Share screen</button><button id="inChat">Chat</button><select aria-label="Call quality" id="quality"><option value="auto">Auto HD</option><option value="smooth">Smooth</option><option value="audio">Audio only</option></select><button class="hang" id="hang">End call</button></div>`;
- button('collapse',()=>{host.classList.toggle('min');if(room)for(const p of room.remoteParticipants.values())for(const t of p.videoTrackPublications.values())t.setVideoQuality(host.classList.contains('min')?VideoQuality.LOW:VideoQuality.HIGH)});
+ host.innerHTML=`<div class="callhead"><strong>${escape(peer)}</strong><span id="callState">Connecting…</span><button id="collapse" aria-label="Minimize call" aria-expanded="true" aria-controls="callStage">−</button></div><div class="stage" id="callStage"><div id="remote"></div><div id="local"></div><form id="incallForm" class="incall" hidden><div id="recent"></div><div class="row" style="flex-wrap:nowrap"><input id="incallText" placeholder="Message during call" aria-label="Message during call"><button type="submit">Send</button></div></form></div><div id="audioMount"></div><div class="call-controls"><button id="mute" aria-label="Microphone" aria-pressed="false" disabled>Mic off</button><button id="camera" aria-label="Camera" aria-pressed="false" disabled>Camera off</button><button class="call-extra" id="flip">Flip</button><button class="call-extra" id="share">Share screen</button><button class="call-extra" id="inChat">Chat</button><select class="call-extra" aria-label="Call quality" id="quality"><option value="auto">Auto HD</option><option value="smooth">Smooth</option><option value="audio">Audio only</option></select><button class="hang" id="hang">End call</button></div>`;
+ button('collapse',()=>{
+  const minimized=host.classList.toggle('min'),control=$('collapse');
+  control.textContent=minimized?'+':'−';
+  control.setAttribute('aria-label',minimized?'Expand call':'Minimize call');
+  control.setAttribute('aria-expanded',String(!minimized));
+  if(room)for(const p of room.remoteParticipants.values())for(const t of p.videoTrackPublications.values())t.setVideoQuality(minimized||manualMode==='smooth'?VideoQuality.LOW:VideoQuality.HIGH);
+ });
  button('hang',async()=>applyCall(await api('/calls/'+r.id+'/end','POST',{})));
  button('inChat',()=>{$('incallForm').hidden=!$('incallForm').hidden;if(!$('incallForm').hidden){render();$('incallText').focus()}});
  form('incallForm',async()=>{if(conversation!==r.conversation)await select(r.conversation);const input=$('incallText');await send(input.value.trim(),true);input.value=''});
@@ -274,6 +468,24 @@ function attachTrack(track,local=false){
  target.append(el);
 }
 async function stopMedia(){const old=room;room=null;if(old)await old.disconnect();clearTimeout(qualityTimer)}
+function updateCallControls(active){
+ if(room!==active||!$('mute')||!$('camera'))return;
+ const participant=active.localParticipant;
+ for(const [id,label,on] of [['mute','Mic',participant.isMicrophoneEnabled],['camera','Camera',participant.isCameraEnabled]]){
+  const control=$(id);
+  control.textContent=label+(on?' on':' off');
+  control.setAttribute('aria-pressed',String(on));
+ }
+}
+function mediaToggle(id,active,change){
+ const control=$(id);
+ control.disabled=false;
+ button(id,async()=>{
+  if(room!==active)return;
+  control.disabled=true;
+  try{await change()}finally{updateCallControls(active);control.disabled=false}
+ });
+}
 async function connectMedia(record,restore){
  ({Room,RoomEvent,Track,VideoQuality,VideoPresets,ConnectionQuality}=await import('livekit-client'));
  await stopMedia();
@@ -304,11 +516,16 @@ async function connectMedia(record,restore){
  if(room!==active||!$('callState'))return;
  $('callState').textContent='Connected';await active.startAudio().catch(()=>{});
  await active.localParticipant.setMicrophoneEnabled(restore?.mic??true).catch(()=>toast('Microphone permission is needed to speak.'));
- if($('mute'))$('mute').textContent=active.localParticipant.isMicrophoneEnabled?'Mic on':'Mic off';
  if(restore?.camera??(record.kind==='video'))await active.localParticipant.setCameraEnabled(true).catch(()=>toast('Camera unavailable. Audio stays connected.'));
+ if(room!==active||!$('mute'))return;
  if(manualMode!=='auto'){if($('quality'))$('quality').value=manualMode;await applyQuality(manualMode)}
- button('mute',async()=>{await active.localParticipant.setMicrophoneEnabled(!active.localParticipant.isMicrophoneEnabled);$('mute').textContent=active.localParticipant.isMicrophoneEnabled?'Mic on':'Mic off'});
- button('camera',async()=>{if(manualMode==='audio'){$('quality').value=manualMode='auto'}await active.localParticipant.setCameraEnabled(!active.localParticipant.isCameraEnabled)});
+ if(room!==active||!$('mute'))return;
+ updateCallControls(active);
+ mediaToggle('mute',active,()=>active.localParticipant.setMicrophoneEnabled(!active.localParticipant.isMicrophoneEnabled));
+ mediaToggle('camera',active,async()=>{
+  await active.localParticipant.setCameraEnabled(!active.localParticipant.isCameraEnabled);
+  if(manualMode==='audio'&&room===active){$('quality').value=manualMode='auto';await applyQuality(manualMode)}
+ });
  let facing='user';
  button('flip',async()=>{const pub=active.localParticipant.getTrackPublication(Track.Source.Camera),t=pub?.track;if(t){facing=facing==='user'?'environment':'user';await t.restartTrack({facingMode:facing})}});
  button('share',async()=>{await active.localParticipant.setScreenShareEnabled(!active.localParticipant.isScreenShareEnabled)});
@@ -316,13 +533,15 @@ async function connectMedia(record,restore){
 }
 async function applyQuality(mode){
  if(!room)return;
- const p=room.localParticipant;
+ const active=room,p=active.localParticipant;
  if(mode==='audio'){await p.setCameraEnabled(false)}else{
   const track=p.getTrackPublication(Track.Source.Camera)?.track;
   if(track)await track.restartTrack({resolution:(mode==='smooth'?VideoPresets.h360:VideoPresets.h720).resolution,frameRate:mode==='smooth'?15:30});
  }
- for(const other of room.remoteParticipants.values())for(const pub of other.videoTrackPublications.values()){
-  pub.setSubscribed(mode!=='audio');if(mode!=='audio')pub.setVideoQuality(mode==='smooth'?VideoQuality.LOW:VideoQuality.HIGH);
+ if(room!==active)return;
+ updateCallControls(active);
+ for(const other of active.remoteParticipants.values())for(const pub of other.videoTrackPublications.values()){
+  pub.setSubscribed(mode!=='audio');if(mode!=='audio')pub.setVideoQuality(mode==='smooth'||$('call').classList.contains('min')?VideoQuality.LOW:VideoQuality.HIGH);
  }
 }
 

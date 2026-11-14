@@ -10,3 +10,29 @@ dialog{border:1px solid var(--line);border-radius:22px;padding:25px;background:v
 #call{position:fixed;z-index:5;bottom:20px;right:20px;width:min(640px,calc(100% - 40px));color:white;padding:12px;background:#152c24;border:1px solid #3c5f50;border-radius:20px;box-shadow:0 15px 50px #133a3260}.callhead,.call-controls{display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:7px}.callhead strong{margin-right:auto}.call-controls button,.callhead button{background:#ffffff20;color:#fff;padding:7px 10px;border-radius:8px}.call-controls .hang{background:#9c2c3d}.call-controls select{width:auto;font-size:13px}.stage{height:min(48vh,380px);background:#213e32;position:relative;border-radius:13px;overflow:hidden;display:grid;place-items:center}.stage video{width:100%;height:100%;object-fit:contain}.stage #local video{width:100px;height:74px;border-radius:8px;object-fit:cover}.stage #local{position:absolute;bottom:8px;right:8px}.stage #remote{width:100%;height:100%;min-height:0;display:grid;place-items:center}.incall{background:#172f28e9;border-radius:12px;position:absolute;bottom:8px;left:8px;width:min(340px,calc(100% - 16px));padding:9px}.incall p{font-size:13px;margin:2px 0;color:#edf4dd}.incall input{padding:7px}.min .stage,.min .call-controls{display:none}.min#call{width:min(330px,calc(100% - 40px))}.danger{color:#a1293c}
 @media(max-width:700px){.gate{grid-template-columns:1fr}.intro{min-height:32vh;padding:21px 25px;gap:27px}.intro h1{font-size:clamp(35px,9vw,53px);margin:0}.intro p,.intro small{display:none}.entry{padding:28px 23px;align-items:start}.panel h2{font-size:28px}.shell{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.side{padding:7px 12px;gap:8px;border-right:0;border-bottom:1px solid var(--line);display:flex;flex-direction:row;align-items:center;justify-content:space-between}.side .logo img{width:29px;height:29px}.side .logo .sub,.side h2,.side .me .name{display:none}.side .me{width:auto;margin:0;padding:0}.side .me .circle{width:31px;height:31px;border-radius:11px}.contacts{display:flex;overflow:auto;max-width:38vw}.contact{width:auto;white-space:nowrap;padding:5px;font-size:11px}.contact .circle{display:none}.bar{padding:8px 11px}.bar .circle{display:none}.timeline{padding:12px}.composer{padding-inline:8px}.icon{width:36px;height:36px}.compose-row{gap:4px}}
 
+.gate-links{display:flex;flex-wrap:wrap;justify-content:space-between;gap:6px 18px;margin-top:10px}
+.password-field{display:grid;gap:7px}
+.password-input{position:relative}
+.password-input input{padding-right:49px}
+.password-input button{position:absolute;inset-block:3px;right:3px;width:42px;display:grid;place-items:center;color:var(--muted);border-radius:9px}
+.password-input button:hover{background:#eef4ed;color:var(--green)}
+.password-input svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.password-input [aria-pressed="false"] .eye-slash{display:none}
+.circle{overflow:hidden;flex-shrink:0}
+.circle img{width:100%;height:100%;object-fit:cover}
+.account-profile{display:flex;align-items:center;gap:13px;min-width:0;overflow-wrap:anywhere}
+.account-profile .circle{width:60px;height:60px;border-radius:19px}
+.account-actions{display:grid;gap:6px}
+.account-actions button{padding:11px 12px;text-align:left;border:1px solid var(--line);border-radius:10px}
+.account-actions button:hover{background:#eef4ed}
+.remove-photo{display:flex;align-items:center;gap:8px}
+.remove-photo input{width:auto}
+.emoji-picker,.reaction-chips{display:flex;flex-wrap:wrap;gap:5px}
+.emoji-picker button{font-size:23px;line-height:1.2;padding:6px;border:1px solid var(--line);border-radius:9px}
+.reaction-chips{margin-top:5px}
+.reaction-chip{padding:2px 6px;border:1px solid var(--line);border-radius:99px;background:#fcfdfa;font-size:12px}
+.emoji-picker button:hover,.emoji-picker [aria-pressed="true"],.reaction-chip:hover,.reaction-chip[aria-pressed="true"]{background:#e6f0de;border-color:#84a991}
+#call.min .call-controls{display:flex}
+#call.min .call-extra{display:none}
+.call-controls [aria-pressed="false"]{background:#ffffff10;box-shadow:inset 0 0 0 1px #ffffff38}
+@media(max-width:700px){.bar #avatar{display:grid;width:32px;height:32px;border-radius:11px}.contact .circle{display:grid;width:21px;height:21px;border-radius:7px;font-size:9px}.contact{gap:5px}}
