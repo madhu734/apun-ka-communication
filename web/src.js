@@ -17,6 +17,7 @@ const value=(id)=>$(id).value.trim();
 const deviceHeaders={'X-App-Device':device};
 let toastTimer,heartbeat,typingTimer,conversation,conversationList=[],people={},messages=new Map(),reactions=[],membership=[],subscriptionOff=[],call,room,callDialogBusy=false,historyLocked=false,reply,attachment,recording,qualityTimer,notificationDevice,pendingSend,older=true;
 let mediaUrls=[];
+let chatRequests=[],inboxSequence=0,inboxFocus,inboxTimer,lastInboxRefresh=0;
 function toast(text){$('toast').textContent=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').textContent='',4500)}
 function reason(e){return e?.response?.message||e?.message||'Please try again.'}
 function button(id,fn){const el=$(id);if(el)el.onclick=async()=>{try{await fn()}catch(e){toast(reason(e))}}}
@@ -80,36 +81,67 @@ async function signout(remote=false){if(!remote){try{if(notificationDevice)await
  clearInterval(heartbeat);clearTimeout(typingTimer);clearTimeout(qualityTimer);for(const off of subscriptionOff)off();subscriptionOff=[];await stopMedia();
  if(recording?.state==='recording'){recording.onstop=()=>recording.stream.getTracks().forEach(t=>t.stop());recording.stop()}
  fileToken='';fileTokenAt=0;fileTokenRequest=null;
+ clearTimeout(inboxTimer);inboxSequence++;inboxFocus=null;conversationList=[];people={};chatRequests=[];lastInboxRefresh=0;
  for(const url of mediaUrls)URL.revokeObjectURL(url);mediaUrls=[];conversation=null;messages.clear();call=null;pendingSend=null;reply=null;attachment=null;notificationDevice=null;
  pb.authStore.clear();gate();if(remote)toast('Your session ended. If you signed in on another device, use that device to continue.');
 }
 
 async function shell(){
- app.innerHTML=`<section class="shell"><aside class="side">${logo}<div><h2>Chats</h2><div id="contacts" class="contacts"></div></div><button class="me" id="settings"><span class="circle">⚙</span><span class="name">Account<span class="sub">Settings</span></span></button></aside><section class="pane"><header class="bar"><span class="circle" id="avatar">–</span><div><strong id="peer">Conversations</strong><span id="status" class="sub">Connecting…</span></div><div class="actions">${icon('audio','phone','Start audio call')}${icon('video','video','Start video call')}</div></header><div id="history" hidden><span>Earlier messages are locked on this device.</span><button id="unlock" class="link">Unlock history</button></div><div id="timeline" class="timeline" aria-label="Messages"></div><form id="composer" class="composer"><div id="pending"></div><div class="compose-row">${icon('attach','attach','Attach media')}${icon('voice','mic','Record voice note')}<input id="file" type="file" accept="image/jpeg,image/png,image/webp,audio/*,video/mp4,video/webm" hidden><textarea id="text" aria-label="Message" placeholder="Write a message…" rows="1"></textarea><button class="primary" type="submit">Send</button></div></form></section></section><dialog id="modal"></dialog><section id="call" hidden aria-label="Active call"></section>`;
+ app.innerHTML=`<section class="shell"><aside class="side">${logo}<div class="chat-nav"><h2>Chats</h2><div class="chat-nav-actions"><button id="findPeople" type="button">Find people</button><button id="requests" type="button">Requests <span id="requestCount" hidden></span></button></div><nav id="contacts" class="contacts" aria-label="Chats"></nav></div><button class="me" id="settings"><span class="circle">⚙</span><span class="name">Account<span class="sub">Settings</span></span></button></aside><section class="pane"><header class="bar"><span class="circle" id="avatar">–</span><div><strong id="peer">Conversations</strong><span id="status" class="sub">Connecting…</span></div><div class="actions" id="chatActions" hidden>${icon('audio','phone','Start audio call')}${icon('video','video','Start video call')}</div></header><div id="history" hidden><span>Earlier messages are locked on this device.</span><button id="unlock" class="link">Unlock history</button></div><div id="timeline" class="timeline" aria-label="Messages"></div><form id="composer" class="composer" hidden><div id="pending"></div><div class="compose-row">${icon('attach','attach','Attach media')}${icon('voice','mic','Record voice note')}<input id="file" type="file" accept="image/jpeg,image/png,image/webp,audio/*,video/mp4,video/webm" hidden><textarea id="text" aria-label="Message" placeholder="Write a message…" rows="1"></textarea><button class="primary" type="submit">Send</button></div></form></section></section><dialog id="modal"></dialog><section id="call" hidden aria-label="Active call"></section>`;
+ conversation=null;
  renderOwnProfile();
  button('settings',settings);button('unlock',unlock);button('audio',()=>startCall('audio'));button('video',()=>startCall('video'));button('attach',()=>$('file').click());button('voice',voice);
- for(const control of $('composer').querySelectorAll('button,textarea'))control.disabled=true;
+ button('findPeople',findPeople);button('requests',openRequests);
  $('file').onchange=()=>{const file=$('file').files[0];if(file?.size>50*1024*1024){toast('Choose a file under 50 MiB.');return}attachment=file;renderPending()};
  $('text').oninput=()=>{if(conversation&&!typingTimer)typingTimer=setTimeout(()=>{typingTimer=null;api('/conversations/'+conversation+'/presence','PUT',{typing:!!value('text')}).catch(()=>{})},900)};
  $('text').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&matchMedia('(pointer:fine)').matches){e.preventDefault();$('composer').requestSubmit()}};
  form('composer',async()=>{await send(value('text'),false);$('text').value=''});
  await loadConversations();
- clearInterval(heartbeat);heartbeat=setInterval(tick,8000);
+ if($('timeline')){clearInterval(heartbeat);heartbeat=setInterval(tick,8000)}
 }
 
 async function loadConversations(){
  try{
-  const session=await api('/account/session');historyLocked=session.historyLocked;$('history').hidden=!historyLocked;
-  conversationList=await col('conversations').getFullList();
-  people=Object.fromEntries(await Promise.all(conversationList.map(async c=>{const rows=await api('/conversations/'+c.id+'/people');return [c.id,rows.find(p=>p.id!==usr())]})));
-  renderContacts();
-  if(conversationList[0])await select(conversationList[0].id);
-  else{$('timeline').innerHTML='<div class="empty"><img src="/mark.svg" alt=""><h3>No conversations yet</h3><p>Your administrator can pair your account with another member.</p></div>';$('composer').hidden=true;$('status').textContent='Connected'}
+  const session=await api('/account/session');historyLocked=session.historyLocked;
+  await refreshInbox();
   await subscribe();
-  if(conversation){await sync();await refreshCall()}
-  for(const control of $('composer').querySelectorAll('button,textarea'))control.disabled=false;
+  if(conversation)await sync();
   $('timeline').dataset.ready='true';
  }catch(e){if(e.status===401||e.status===403)return signout(true);$('status').textContent='Connection interrupted';toast(reason(e))}
+}
+async function refreshInbox(preferred){
+ if(preferred)inboxFocus=preferred;
+ const sequence=++inboxSequence,contacts=$('contacts');
+ if(!contacts||!usr())return;
+ const result=await api('/inbox');
+ if(sequence!==inboxSequence||$('contacts')!==contacts)return;
+ const next=result.chats.find(chat=>chat.id===inboxFocus)?.id
+  ||result.chats.find(chat=>chat.id===conversation)?.id||result.chats[0]?.id;
+ inboxFocus=null;
+ lastInboxRefresh=Date.now();
+ const contactsChanged=JSON.stringify(conversationList)!==JSON.stringify(result.chats);
+ const requestsChanged=JSON.stringify(chatRequests)!==JSON.stringify(result.requests);
+ conversationList=result.chats;
+ people=Object.fromEntries(conversationList.map(chat=>[chat.id,chat.peer]));
+ chatRequests=result.requests;
+ if(contactsChanged)renderContacts();
+ if(requestsChanged)renderRequests();
+ if(next){
+  if(next!==conversation)await select(next);
+  else if(contactsChanged)renderChatHeader(people[next]);
+ }else{
+  conversation=null;
+  $('peer').textContent='Conversations';
+  $('avatar').textContent='–';
+  $('composer').hidden=$('chatActions').hidden=$('history').hidden=true;
+  $('status').textContent='Connected';
+  $('timeline').innerHTML='<div class="empty"><img src="/mark.svg" alt=""><h3>No conversations yet</h3><p>Find a member and send a message request to start chatting.</p><button id="emptyFind" type="button" class="primary">Find people</button></div>';
+  button('emptyFind',findPeople);
+ }
+}
+function scheduleInboxRefresh(){
+ clearTimeout(inboxTimer);
+ inboxTimer=setTimeout(()=>refreshInbox().catch(e=>{if(e.status!==401)toast(reason(e))}),100);
 }
 const personName=(person,fallback='Conversation')=>person?.name?.trim()||fallback;
 function initials(name){return name.trim().split(/\s+/).slice(0,2).map(word=>Array.from(word)[0]).join('').toUpperCase()}
@@ -142,12 +174,94 @@ function renderContacts(){
  });
 }
 async function select(id){
+ if(!people[id])return;
+ if(conversation===id){await sync();return}
  conversation=id;messages.clear();reactions=[];membership=[];reply=null;attachment=null;pendingSend=null;older=true;
- renderPending();renderContacts();
- const name=personName(people[id]),oldAvatar=$('avatar'),avatar=oldAvatar.cloneNode(false);
+ clearTimeout(typingTimer);typingTimer=null;readKey=null;
+ $('text').value=$('file').value='';
+ $('composer').hidden=$('chatActions').hidden=false;
+ $('history').hidden=!historyLocked;
+ $('status').textContent='Connecting…';
+ $('timeline').innerHTML='<div class="empty" role="status">Loading messages…</div>';
+ renderPending();
+ for(const contact of $('contacts').querySelectorAll('.contact'))contact.classList.toggle('active',contact.dataset.id===id);
+ renderChatHeader(people[id]);
+ await sync();
+ if(conversation===id){updatePresence();await refreshCall()}
+}
+function renderChatHeader(person){
+ const name=personName(person),oldAvatar=$('avatar'),avatar=oldAvatar.cloneNode(false);
  oldAvatar.replaceWith(avatar);
- $('peer').textContent=name;showAvatar(avatar,people[id],name);
- await sync();await refreshCall();
+ $('peer').textContent=name;showAvatar(avatar,person,name);
+}
+function findPeople(){
+ modal('Find people',field('Name or email address','memberQuery','search','minlength="2" maxlength="255" autocomplete="off"')+submit('Search')+'<div id="memberResults" class="member-results" aria-live="polite"></div>',async()=>{
+  const container=$('memberResults'),query=value('memberQuery');
+  const members=await api('/members/search?'+new URLSearchParams({q:query}));
+  if(!container.isConnected)return;
+  container.innerHTML=members.length?members.map(member=>{
+   const name=personName(member,'Member');
+   const chat=conversationList.find(chat=>chat.peer.id===member.id);
+   const request=chatRequests.find(request=>request.peer.id===member.id);
+   return `<div class="member-row"><span class="circle">${escape(initials(name))}</span><strong>${escape(name)}</strong><button type="button" data-member="${escape(member.id)}" ${!chat&&request&&!request.incoming?'disabled':''}>${chat?'Open chat':request?(request.incoming?'View request':'Request sent'):'Message request'}</button></div>`;
+  }).join(''):'<p class="notice">No members found.</p>';
+  for(const control of container.querySelectorAll('[data-member]'))control.onclick=async()=>{
+   const member=members.find(member=>member.id===control.dataset.member);
+   const chat=conversationList.find(chat=>chat.peer.id===member.id);
+   if(chat){$('modal').close();await select(chat.id).catch(e=>toast(reason(e)));return}
+   if(chatRequests.some(request=>request.peer.id===member.id)){openRequests();return}
+   composeRequest(member);
+  };
+ });
+}
+function composeRequest(member){
+ const name=personName(member,'Member');
+ modal('Message request',`<p class="notice">Send a request to <strong>${escape(name)}</strong>.</p><label for="requestNote">First message (optional)<textarea id="requestNote" maxlength="500" rows="3" placeholder="Say hello…"></textarea></label>`+submit('Send request'),async()=>{
+  const result=await api('/message-requests','POST',{recipient:member.id,note:value('requestNote')});
+  $('modal').close();
+  await refreshInbox(result.conversation);
+  if(result.direction==='incoming')openRequests();
+  else if(result.request)toast('Message request sent.');
+ });
+}
+function openRequests(){
+ modal('Message requests','<div id="requestList" class="request-list" aria-live="polite"></div>');
+ renderRequests();
+}
+function renderRequests(){
+ const count=chatRequests.filter(request=>request.incoming).length,badge=$('requestCount');
+ if(!badge)return;
+ badge.hidden=count===0;badge.textContent=count;
+ const list=$('requestList');
+ if(!list)return;
+ list.innerHTML=[true,false].map(incoming=>{
+  const rows=chatRequests.filter(request=>request.incoming===incoming);
+  return `<section><h3>${incoming?'Received':'Sent'}</h3>${rows.length?rows.map(request=>{
+   const name=personName(request.peer,'Member');
+   return `<article class="request-card" data-request="${escape(request.id)}"><div class="member-row"><span class="circle">${escape(initials(name))}</span><strong>${escape(name)}</strong></div>${request.note?`<p>${escape(request.note)}</p>`:''}<div class="request-controls">${incoming?'<button type="button" class="primary" data-action="accept">Accept</button>':''}<button type="button" data-action="remove">${incoming?'Decline':'Cancel request'}</button></div></article>`;
+  }).join(''):'<p class="notice">No pending requests.</p>'}</section>`;
+ }).join('');
+ list.onclick=async event=>{
+  const control=event.target.closest('[data-action]');
+  if(!control)return;
+  const card=control.closest('[data-request]');
+  const buttons=[...card.querySelectorAll('button')];
+  buttons.forEach(button=>button.disabled=true);
+  const path='/message-requests/'+card.dataset.request;
+  try{
+   if(control.dataset.action==='accept'){
+    const result=await api(path+'/accept','POST',{});
+    $('modal').close();
+    await refreshInbox(result.conversation);
+   }else{
+    await api(path,'DELETE');
+    await refreshInbox();
+   }
+  }catch(e){
+   toast(reason(e));
+   if(e.status===404)await refreshInbox().catch(()=>{});
+  }finally{buttons.forEach(button=>button.disabled=false)}
+ };
 }
 const filter=id=>pb.filter('conversation = {:id}',{id});
 async function historyPage(mode='latest'){
@@ -176,7 +290,9 @@ async function catchUp(id){
 async function sync(){
  const id=conversation;if(!id)return;
  await catchUp(id);
+ if(conversation!==id)return;
  await historyPage();
+ if(conversation!==id)return;
  const [r,m]=await Promise.all([loadReactions(id),col('conversation_members').getFullList({filter:filter(id)})]);
  if(conversation!==id)return;
  reactions=r;membership=m;render(true);markRead();
@@ -296,15 +412,17 @@ let readKey;
 function markRead(){if(document.hidden||!conversation)return;const list=ordered();const last=list.at(-1);if(last&&last.id!==readKey){readKey=last.id;api('/conversations/'+conversation+'/read','PUT',{message:last.id}).catch(()=>readKey=null)}}
 let syncing=false,changingPassword=false;
 async function tick(){if(syncing||changingPassword||!usr()||!$('timeline'))return;const token=pb.authStore.token;syncing=true;try{
- const s=await api('/account/session');if(historyLocked!==s.historyLocked){historyLocked=s.historyLocked;$('history').hidden=!historyLocked;messages.clear();await sync()}
+ const s=await api('/account/session');if(historyLocked!==s.historyLocked){historyLocked=s.historyLocked;$('history').hidden=!conversation||!historyLocked;messages.clear();await sync()}
  if(!subscriptionOff.length){await loadConversations();return}
+ if(!pb.realtime.isConnected||Date.now()-lastInboxRefresh>30000)await refreshInbox();
  if(conversation&&!document.hidden)await api('/conversations/'+conversation+'/presence','PUT',{typing:false});
  if(conversation){if(!pb.realtime.isConnected)await sync();await refreshCall()}
 }catch(e){if((e.status===401||e.status===403)&&token===pb.authStore.token&&!changingPassword)await signout(true)}finally{syncing=false}}
 async function subscribe(){
  for(const off of subscriptionOff)off();subscriptionOff=[];
- try{for(const n of ['messages','conversation_members','message_reactions','calls']){
+ try{for(const n of ['messages','conversation_members','message_reactions','calls','conversations','message_requests']){
   const off=await col(n).subscribe('*',evt=>{const r=evt.record;
+   if(n==='conversations'||n==='message_requests'){scheduleInboxRefresh();return}
    if(n==='calls'){if(r.caller===usr()||r.receiver===usr())applyCall(r).catch(e=>toast(reason(e)));return}
    if(r.conversation!==conversation)return;
    if(n==='messages'){if(evt.action==='delete')messages.delete(r.id);else messages.set(r.id,r);render();markRead()}
@@ -554,7 +672,7 @@ async function init(){
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&usr()){tick();sync().catch(()=>{})}});
 window.addEventListener('online',()=>{if(usr()){tick();sync().catch(()=>{})}});
 window.addEventListener('hashchange',init);
-pb.realtime.subscribe('PB_CONNECT',()=>{if(conversation)sync().catch(()=>{})}).catch(()=>{});
+pb.realtime.subscribe('PB_CONNECT',()=>{if(usr())scheduleInboxRefresh();if(conversation)sync().catch(()=>{})}).catch(()=>{});
 navigator.serviceWorker?.addEventListener('message',()=>{if(usr()){refreshCall().catch(()=>{});sync().catch(()=>{})}});
 init().catch(e=>{gate();toast(reason(e))});
 

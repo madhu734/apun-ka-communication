@@ -1,6 +1,8 @@
 package main
 
 import (
+	"database/sql"
+	"errors"
 	"slices"
 	"strings"
 
@@ -138,22 +140,42 @@ func relation(name string, col *core.Collection, required bool) *core.RelationFi
 }
 func date(name string) *core.DateField { return &core.DateField{Name: name} }
 
-func ensureConversation(app core.App, members []string) (*core.Record, error) {
+func pairKey(members []string) string {
 	members = slices.Clone(members)
 	slices.Sort(members)
-	pair := strings.Join(members, ":")
+	return strings.Join(members, ":")
+}
+
+func findConversation(app core.App, members []string) (*core.Record, error) {
+	pair := pairKey(members)
 	existing, err := app.FindFirstRecordByData("conversations", "pair", pair)
-	if err == nil {
+	if err == nil && pairKey(existing.GetStringSlice("members")) == pair {
 		return existing, nil
 	}
-	col, err := app.FindCollectionByNameOrId("conversations")
-	if err != nil {
-		return nil, err
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return existing, err
 	}
-	r := core.NewRecord(col)
-	r.Set("members", members)
-	r.Set("pair", pair)
-	if err = app.Save(r); err != nil {
+	// Dashboard-created chats can have a manually entered pair key.
+	var manual core.Record
+	err = app.RecordQuery("conversations").
+		Where(dbx.NewExp(`(SELECT count(DISTINCT value) FROM json_each(conversations.members) WHERE value IN ({:a},{:b})) = 2`,
+			dbx.Params{"a": members[0], "b": members[1]})).
+		OrderBy("created", "id").Limit(1).One(&manual)
+	return &manual, err
+}
+
+func ensureConversation(app core.App, members []string) (*core.Record, error) {
+	r, err := findConversation(app, members)
+	if errors.Is(err, sql.ErrNoRows) {
+		r, err = newRow(app, "conversations")
+		if err != nil {
+			return nil, err
+		}
+		r.Set("members", members)
+		r.Set("pair", pairKey(members))
+		err = app.Save(r)
+	}
+	if err != nil {
 		return nil, err
 	}
 	for _, id := range members {
@@ -169,11 +191,13 @@ func findMembership(app core.App, conv, user string) (*core.Record, error) {
 	if err == nil {
 		return row, nil
 	}
-	col, err := app.FindCollectionByNameOrId("conversation_members")
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	row, err = newRow(app, "conversation_members")
 	if err != nil {
 		return nil, err
 	}
-	row = core.NewRecord(col)
 	row.Set("conversation", conv)
 	row.Set("user", user)
 	return row, app.Save(row)

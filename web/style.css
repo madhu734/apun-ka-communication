@@ -36,3 +36,28 @@ dialog{border:1px solid var(--line);border-radius:22px;padding:25px;background:v
 #call.min .call-extra{display:none}
 .call-controls [aria-pressed="false"]{background:#ffffff10;box-shadow:inset 0 0 0 1px #ffffff38}
 @media(max-width:700px){.bar #avatar{display:grid;width:32px;height:32px;border-radius:11px}.contact .circle{display:grid;width:21px;height:21px;border-radius:7px;font-size:9px}.contact{gap:5px}}
+.chat-nav-actions{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px}
+.chat-nav-actions button,.member-row button,.request-controls button[data-action="remove"]{padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--paper);color:var(--green);font-size:12px;font-weight:750}
+.chat-nav-actions button:first-child{color:white;background:var(--green);border-color:var(--green)}
+.chat-nav-actions button:hover,.member-row button:hover,.request-controls button[data-action="remove"]:hover{border-color:#86a594}
+#requestCount{display:inline-grid;place-items:center;min-width:18px;height:18px;padding-inline:4px;border-radius:99px;background:var(--lime);color:#163b2e;font-size:10px}
+.member-results,.request-list,.request-list section{display:grid;gap:9px}
+.request-list h3{margin:0;font-size:14px}
+.request-list section+section{padding-top:13px}
+.request-list .notice,.member-results .notice{margin:0}
+.member-row{display:flex;align-items:center;gap:9px;min-width:0;font-size:13px}
+.member-row strong{flex:1;min-width:0;overflow-wrap:anywhere}
+.member-row button{flex-shrink:0}
+.member-row .circle{width:32px;height:32px;border-radius:11px;font-size:12px}
+.member-results>.member-row,.request-card{border:1px solid var(--line);border-radius:12px;padding:9px;background:white}
+.request-card p{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;margin:8px 0}
+.request-controls{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+.request-controls .primary{font-size:12px;padding:8px 12px}
+#modal{max-height:90dvh}
+@media(max-width:700px){
+ .side{display:grid;grid-template-columns:1fr auto;gap:7px 12px}
+ .side .me{grid-column:2;grid-row:1}
+ .chat-nav{grid-column:1/-1;min-width:0}
+ .chat-nav-actions{margin-bottom:5px}
+ .chat-nav .contacts{max-width:none}
+}
