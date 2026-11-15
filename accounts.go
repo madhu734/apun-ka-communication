@@ -81,92 +81,16 @@ func accountSchema(app core.App) error {
 }
 
 func (s *service) accountRoutes(e *core.ServeEvent) {
-	s.app.OnRecordAuthWithPasswordRequest("users").BindFunc(func(event *core.RecordAuthWithPasswordRequestEvent) error {
-		if event.Record == nil || !event.Record.ValidatePassword(event.Password) {
-			return event.Next()
-		}
-		device := event.Request.Header.Get("X-App-Device")
-		if !validDevice(device) {
-			return event.BadRequestError("A valid installation ID is required.", nil)
-		}
-		var previous []*core.Record
-		var rooms []*core.Record
-		err := s.app.RunInTransaction(func(tx core.App) error {
-			user, err := tx.FindRecordById("users", event.Record.Id)
-			if err != nil {
-				return err
-			}
-			if user.TokenKey() != event.Record.TokenKey() && !user.ValidatePassword(event.Password) {
-				return errConflict
-			}
-			changed := user.GetString("current_device") != device
-			user.SetTokenKey(security.RandomString(50))
-			if changed {
-				user.Set("current_device", device)
-				user.Set("history_cutoff", time.Now())
-				previous, err = tx.FindRecordsByFilter("devices", "user = {:u}", "", 0, 0, dbx.Params{"u": user.Id})
-				if err != nil {
-					return err
-				}
-				for _, d := range previous {
-					if err := deleteDevice(tx, d); err != nil {
-						return err
-					}
-				}
-				rooms, err = tx.FindRecordsByFilter("calls", "(caller = {:u} || receiver = {:u}) && (status = 'ringing' || status = 'accepted' || status = 'connected')", "", 0, 0, dbx.Params{"u": user.Id})
-				if err != nil {
-					return err
-				}
-				for _, r := range rooms {
-					finish(r, "ended")
-					if err := tx.Save(r); err != nil {
-						return err
-					}
-				}
-			}
-			if err := tx.Save(user); err != nil {
-				return err
-			}
-			event.Record = user
-			return nil
-		})
-		if err != nil {
-			return apiError(event.RequestEvent, err)
-		}
-		for _, r := range rooms {
-			if r.GetBool("cleanup_pending") {
-				s.deleteRoom(event.Request.Context(), r)
-			}
-		}
-		return event.Next()
-	})
+	s.sessionRoutes(e)
 	auth := e.Router.Group("/api/app/account").Bind(apis.RequireAuth("users"))
 	auth.GET("/session", func(e *core.RequestEvent) error {
-		return e.JSON(200, map[string]any{"historyLocked": !e.Auth.GetDateTime("history_cutoff").IsZero()})
+		return e.JSON(200, map[string]bool{"active": true})
 	})
-	auth.POST("/history/request", s.requestCode("history"))
-	auth.POST("/history/confirm", s.confirmCode("history"))
 	auth.POST("/password", s.changePassword)
-	auth.POST("/logout", func(e *core.RequestEvent) error {
-		err := s.app.RunInTransaction(func(tx core.App) error {
-			u, err := tx.FindRecordById("users", e.Auth.Id)
-			if err != nil {
-				return err
-			}
-			if u.TokenKey() != e.Auth.TokenKey() {
-				return errConflict
-			}
-			u.SetTokenKey(security.RandomString(50))
-			return tx.Save(u)
-		})
-		if err != nil {
-			return apiError(e, err)
-		}
-		return e.NoContent(204)
-	})
+	auth.POST("/logout", s.logoutSession)
 	e.Router.POST("/api/app/account/register", s.registerAccount)
-	e.Router.POST("/api/app/account/recovery/request", s.requestCode("recovery"))
-	e.Router.POST("/api/app/account/recovery/confirm", s.confirmCode("recovery"))
+	e.Router.POST("/api/app/account/recovery/request", s.requestRecoveryCode)
+	e.Router.POST("/api/app/account/recovery/confirm", s.confirmRecoveryCode)
 }
 
 type newPassword struct {
@@ -205,13 +129,21 @@ func (s *service) registerAccount(e *core.RequestEvent) error {
 	user.SetEmail(email)
 	user.SetPassword(body.Password)
 	user.Set("name", name)
-	user.Set("current_device", device)
-	if err := s.app.Save(user); err != nil {
+	var session *core.Record
+	if err := s.app.RunInTransaction(func(tx core.App) error {
+		if err := tx.Save(user); err != nil {
+			return err
+		}
+		var err error
+		session, err = s.openSession(tx, user, device, nil)
+		return err
+	}); err != nil {
 		if _, lookupErr := s.app.FindAuthRecordByEmail("users", email); lookupErr == nil {
 			return e.BadRequestError("This email already has an account. Sign in or reset your password.", nil)
 		}
 		return e.BadRequestError("Could not create an account with this email address.", err)
 	}
+	e.Set(sessionKey, session)
 	return apis.RecordAuthResponse(e, user, "", nil)
 }
 
@@ -220,8 +152,13 @@ func (s *service) changePassword(e *core.RequestEvent) error {
 	if e.BindBody(&body) != nil || !body.valid() {
 		return e.BadRequestError("Enter a matching password of 8 to 72 bytes.", nil)
 	}
-	var user *core.Record
+	session := requestSession(e)
+	var replacement, user *core.Record
+	var rooms []*core.Record
 	err := s.app.RunInTransaction(func(tx core.App) error {
+		if _, err := tx.FindRecordById("app_sessions", session.Id); err != nil {
+			return errConflict
+		}
 		var err error
 		user, err = tx.FindRecordById("users", e.Auth.Id)
 		if err != nil {
@@ -232,11 +169,17 @@ func (s *service) changePassword(e *core.RequestEvent) error {
 		}
 		user.SetPassword(body.Password)
 		user.SetTokenKey(security.RandomString(50))
-		return tx.Save(user)
+		if err := tx.Save(user); err != nil {
+			return err
+		}
+		replacement, err = s.openSession(tx, user, session.GetString("device"), &rooms)
+		return err
 	})
 	if err != nil {
 		return apiError(e, err)
 	}
+	s.cleanSessionRooms(e.Request.Context(), rooms)
+	e.Set(sessionKey, replacement)
 	return apis.RecordAuthResponse(e, user, "", nil)
 }
 
@@ -246,125 +189,107 @@ func (s *service) codeDigest(id, purpose, code string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (s *service) requestCode(purpose string) func(*core.RequestEvent) error {
-	return func(e *core.RequestEvent) error {
-		if s.secret == "" || !s.app.Settings().SMTP.Enabled {
-			return e.JSON(503, map[string]string{"message": "Email is unavailable."})
-		}
-		user := e.Auth
-		if purpose == "recovery" {
-			var body struct{ Email string }
-			if e.BindBody(&body) != nil {
-				return apiError(e, errInvalid)
-			}
-			found, err := s.app.FindAuthRecordByEmail("users", strings.TrimSpace(body.Email))
-			if err != nil {
-				return e.NoContent(204)
-			}
-			user = found
-		} else if user.GetDateTime("history_cutoff").IsZero() {
-			return e.NoContent(204)
-		}
-		code := security.RandomStringWithAlphabet(6, "0123456789")
-		err := s.app.RunInTransaction(func(tx core.App) error {
-			row, err := tx.FindFirstRecordByFilter("account_codes", "user = {:u} && purpose = {:p}", dbx.Params{"u": user.Id, "p": purpose})
-			if errors.Is(err, sql.ErrNoRows) {
-				row, err = newRow(tx, "account_codes")
-			}
-			if err != nil {
-				return err
-			}
-			if !row.GetDateTime("expires").IsZero() && time.Until(row.GetDateTime("expires").Time()) > 9*time.Minute {
-				return errConflict
-			}
-			row.Set("user", user.Id)
-			row.Set("purpose", purpose)
-			row.Set("expires", time.Now().Add(10*time.Minute))
-			row.Set("attempts", 0)
-			row.Set("digest", s.codeDigest(user.Id, purpose, code))
-			row.Set("session", s.codeDigest(user.Id, purpose, user.TokenKey()))
-			return tx.Save(row)
-		})
-		if errors.Is(err, errConflict) {
-			return e.NoContent(204)
-		}
-		if err != nil {
-			return apiError(e, err)
-		}
-		title, body := "Your password recovery code", "Enter this code in Apun Ka Communication to set a new password."
-		if purpose == "history" {
-			title, body = "Unlock your chat history", "Enter this code in Apun Ka Communication on your current device."
-		}
-		settings := s.app.Settings()
-		msg := &mailer.Message{From: mail.Address{Name: brand, Address: settings.Meta.SenderAddress}, To: []mail.Address{{Address: user.Email()}}, Subject: title + " · " + brand, Text: body + " Code: " + code + ". It expires in 10 minutes.", HTML: mailLayout(title, body, "", "", code)}
-		if err := s.app.NewMailClient().Send(msg); err != nil {
-			s.app.Logger().Error("Account code email failed", "purpose", purpose)
-			if purpose == "history" {
-				return e.JSON(503, map[string]string{"message": "Could not send the code. Try again shortly."})
-			}
-		}
+func (s *service) requestRecoveryCode(e *core.RequestEvent) error {
+	const purpose = "recovery"
+	if s.secret == "" || !s.app.Settings().SMTP.Enabled {
+		return e.JSON(503, map[string]string{"message": "Email is unavailable."})
+	}
+	var body struct{ Email string }
+	if e.BindBody(&body) != nil {
+		return apiError(e, errInvalid)
+	}
+	user, err := s.app.FindAuthRecordByEmail("users", strings.TrimSpace(body.Email))
+	if errors.Is(err, sql.ErrNoRows) {
 		return e.NoContent(204)
 	}
+	if err != nil {
+		return apiError(e, err)
+	}
+	code := security.RandomStringWithAlphabet(6, "0123456789")
+	err = s.app.RunInTransaction(func(tx core.App) error {
+		row, err := tx.FindFirstRecordByFilter("account_codes", "user = {:u} && purpose = {:p}", dbx.Params{"u": user.Id, "p": purpose})
+		if errors.Is(err, sql.ErrNoRows) {
+			row, err = newRow(tx, "account_codes")
+		}
+		if err != nil {
+			return err
+		}
+		if !row.GetDateTime("expires").IsZero() && time.Until(row.GetDateTime("expires").Time()) > 9*time.Minute {
+			return errConflict
+		}
+		row.Set("user", user.Id)
+		row.Set("purpose", purpose)
+		row.Set("expires", time.Now().Add(10*time.Minute))
+		row.Set("attempts", 0)
+		row.Set("digest", s.codeDigest(user.Id, purpose, code))
+		row.Set("session", s.codeDigest(user.Id, purpose, user.TokenKey()))
+		return tx.Save(row)
+	})
+	if errors.Is(err, errConflict) {
+		return e.NoContent(204)
+	}
+	if err != nil {
+		return apiError(e, err)
+	}
+	title, message := "Your password recovery code", "Enter this code in Apun Ka Communication to set a new password."
+	settings := s.app.Settings()
+	msg := &mailer.Message{From: mail.Address{Name: brand, Address: settings.Meta.SenderAddress}, To: []mail.Address{{Address: user.Email()}}, Subject: title + " · " + brand, Text: message + " Code: " + code + ". It expires in 10 minutes.", HTML: mailLayout(title, message, "", "", code)}
+	if err := s.app.NewMailClient().Send(msg); err != nil {
+		s.app.Logger().Error("Account code email failed", "purpose", purpose)
+	}
+	return e.NoContent(204)
 }
 
-func (s *service) confirmCode(purpose string) func(*core.RequestEvent) error {
-	return func(e *core.RequestEvent) error {
-		var body struct{ Email, Code, Password, PasswordConfirm string }
-		if e.BindBody(&body) != nil || len(body.Code) != 6 {
-			return apiError(e, errInvalid)
-		}
-		if purpose == "recovery" && (body.Password != body.PasswordConfirm || len(body.Password) < 8 || len(body.Password) > 72) {
-			return apiError(e, errInvalid)
-		}
-		var valid bool
-		err := s.app.RunInTransaction(func(tx core.App) error {
-			var user *core.Record
-			var err error
-			if purpose == "history" {
-				user, err = tx.FindRecordById("users", e.Auth.Id)
-			} else {
-				user, err = tx.FindAuthRecordByEmail("users", strings.TrimSpace(body.Email))
-			}
-			if err != nil || (purpose == "history" && user.TokenKey() != e.Auth.TokenKey()) {
-				return nil
-			}
-			row, err := tx.FindFirstRecordByFilter("account_codes", "user = {:u} && purpose = {:p}", dbx.Params{"u": user.Id, "p": purpose})
-			if errors.Is(err, sql.ErrNoRows) {
-				return nil
-			}
-			if err != nil {
-				return err
-			}
-			if row.GetInt("attempts") >= 5 || !time.Now().Before(row.GetDateTime("expires").Time()) || row.GetString("session") != s.codeDigest(user.Id, purpose, user.TokenKey()) {
-				return nil
-			}
-			if subtle.ConstantTimeCompare([]byte(row.GetString("digest")), []byte(s.codeDigest(user.Id, purpose, body.Code))) != 1 {
-				row.Set("attempts", row.GetInt("attempts")+1)
-				return tx.Save(row)
-			}
-			if purpose == "history" {
-				user.Set("history_cutoff", "")
-			} else {
-				user.SetPassword(body.Password)
-				user.SetTokenKey(security.RandomString(50))
-			}
-			if err := tx.Save(user); err != nil {
-				return err
-			}
-			if err := tx.Delete(row); err != nil {
-				return err
-			}
-			valid = true
-			return nil
-		})
-		if err != nil {
-			return apiError(e, err)
-		}
-		if !valid {
-			return e.BadRequestError("Invalid or expired code.", nil)
-		}
-		return e.NoContent(204)
+func (s *service) confirmRecoveryCode(e *core.RequestEvent) error {
+	const purpose = "recovery"
+	var body struct{ Email, Code, Password, PasswordConfirm string }
+	if e.BindBody(&body) != nil || len(body.Code) != 6 {
+		return apiError(e, errInvalid)
 	}
+	if !(newPassword{body.Password, body.PasswordConfirm}).valid() {
+		return apiError(e, errInvalid)
+	}
+	var valid bool
+	err := s.app.RunInTransaction(func(tx core.App) error {
+		user, err := tx.FindAuthRecordByEmail("users", strings.TrimSpace(body.Email))
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		row, err := tx.FindFirstRecordByFilter("account_codes", "user = {:u} && purpose = {:p}", dbx.Params{"u": user.Id, "p": purpose})
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if row.GetInt("attempts") >= 5 || !time.Now().Before(row.GetDateTime("expires").Time()) || row.GetString("session") != s.codeDigest(user.Id, purpose, user.TokenKey()) {
+			return nil
+		}
+		if subtle.ConstantTimeCompare([]byte(row.GetString("digest")), []byte(s.codeDigest(user.Id, purpose, body.Code))) != 1 {
+			row.Set("attempts", row.GetInt("attempts")+1)
+			return tx.Save(row)
+		}
+		user.SetPassword(body.Password)
+		user.SetTokenKey(security.RandomString(50))
+		if err := tx.Save(user); err != nil {
+			return err
+		}
+		if err := tx.Delete(row); err != nil {
+			return err
+		}
+		valid = true
+		return nil
+	})
+	if err != nil {
+		return apiError(e, err)
+	}
+	if !valid {
+		return e.BadRequestError("Invalid or expired code.", nil)
+	}
+	return e.NoContent(204)
 }
 
 func mailLayout(title, body, action, link, code string) string {

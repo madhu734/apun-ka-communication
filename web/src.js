@@ -23,7 +23,7 @@ const api=(path,method='GET',body)=>pb.send('/api/app'+path,{method,body});
 const col=name=>pb.collection(name);
 const value=(id)=>$(id).value.trim();
 const deviceHeaders={'X-App-Device':device};
-let toastTimer,heartbeat,typingTimer,conversation,conversationList=[],people={},messages=new Map(),reactions=[],membership=[],subscriptionOff=[],call,room,callDialogBusy=false,historyLocked=false,reply,attachment,recording,qualityTimer,notificationDevice,pendingSend,older=true;
+let toastTimer,heartbeat,typingTimer,conversation,conversationList=[],people={},messages=new Map(),reactions=[],membership=[],subscriptionOff=[],call,room,callDialogBusy=false,reply,attachment,recording,qualityTimer,notificationDevice,pendingSend,older=true;
 let mediaUrls=[];
 let chatRequests=[],inboxSequence=0,inboxFocus,inboxTimer,lastInboxRefresh=0;
 function toast(text){$('toast').textContent=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').textContent='',4500)}
@@ -91,14 +91,14 @@ async function signout(remote=false){if(!remote){try{if(notificationDevice)await
  fileToken='';fileTokenAt=0;fileTokenRequest=null;
  clearTimeout(inboxTimer);inboxSequence++;inboxFocus=null;conversationList=[];people={};chatRequests=[];lastInboxRefresh=0;
  for(const url of mediaUrls)URL.revokeObjectURL(url);mediaUrls=[];conversation=null;messages.clear();call=null;pendingSend=null;reply=null;attachment=null;notificationDevice=null;
- pb.authStore.clear();gate();if(remote)toast('Your session ended. If you signed in on another device, use that device to continue.');
+ pb.authStore.clear();gate();if(remote)toast('Your session ended. Sign in again to continue.');
 }
 
 async function shell(){
- app.innerHTML=`<section class="shell"><aside class="side">${logo}<div class="chat-nav"><h2>Chats</h2><div class="chat-nav-actions"><button id="findPeople" type="button">Find people</button><button id="requests" type="button">Requests <span id="requestCount" hidden></span></button></div><nav id="contacts" class="contacts" aria-label="Chats"></nav></div><button class="me" id="settings"><span class="circle">⚙</span><span class="name">Account<span class="sub">Settings</span></span></button></aside><section class="pane"><header class="bar"><span class="circle" id="avatar">–</span><div><strong id="peer">Conversations</strong><span id="status" class="sub">Connecting…</span></div><div class="actions" id="chatActions" hidden>${icon('audio','phone','Start audio call')}${icon('video','video','Start video call')}</div></header><div id="history" hidden><span>Earlier messages are locked on this device.</span><button id="unlock" class="link">Unlock history</button></div><div id="timeline" class="timeline" aria-label="Messages"></div><form id="composer" class="composer" hidden><div id="pending"></div><div class="compose-row">${icon('attach','attach','Attach media')}${icon('voice','mic','Record voice note')}<input id="file" type="file" accept="image/jpeg,image/png,image/webp,audio/*,video/mp4,video/webm" hidden><textarea id="text" aria-label="Message" placeholder="Write a message…" rows="1"></textarea><button class="primary" type="submit">Send</button></div></form></section></section><dialog id="modal"></dialog><section id="call" hidden aria-label="Active call"></section>`;
+ app.innerHTML=`<section class="shell"><aside class="side">${logo}<div class="chat-nav"><h2>Chats</h2><div class="chat-nav-actions"><button id="findPeople" type="button">Find people</button><button id="requests" type="button">Requests <span id="requestCount" hidden></span></button></div><nav id="contacts" class="contacts" aria-label="Chats"></nav></div><button class="me" id="settings"><span class="circle">⚙</span><span class="name">Account<span class="sub">Settings</span></span></button></aside><section class="pane"><header class="bar"><span class="circle" id="avatar">–</span><div><strong id="peer">Conversations</strong><span id="status" class="sub">Connecting…</span></div><div class="actions" id="chatActions" hidden>${icon('audio','phone','Start audio call')}${icon('video','video','Start video call')}</div></header><div id="timeline" class="timeline" aria-label="Messages"></div><form id="composer" class="composer" hidden><div id="pending"></div><div class="compose-row">${icon('attach','attach','Attach media')}${icon('voice','mic','Record voice note')}<input id="file" type="file" accept="image/jpeg,image/png,image/webp,audio/*,video/mp4,video/webm" hidden><textarea id="text" aria-label="Message" placeholder="Write a message…" rows="1"></textarea><button class="primary" type="submit">Send</button></div></form></section></section><dialog id="modal"></dialog><section id="call" hidden aria-label="Active call"></section>`;
  conversation=null;
  renderOwnProfile();
- button('settings',settings);button('unlock',unlock);button('audio',()=>startCall('audio'));button('video',()=>startCall('video'));button('attach',()=>$('file').click());button('voice',voice);
+ button('settings',settings);button('audio',()=>startCall('audio'));button('video',()=>startCall('video'));button('attach',()=>$('file').click());button('voice',voice);
  button('findPeople',findPeople);button('requests',openRequests);
  $('file').onchange=()=>{const file=$('file').files[0];if(file?.size>50*1024*1024){toast('Choose a file under 50 MiB.');return}attachment=file;renderPending()};
  $('text').oninput=()=>{if(conversation&&!typingTimer)typingTimer=setTimeout(()=>{typingTimer=null;api('/conversations/'+conversation+'/presence','PUT',{typing:!!value('text')}).catch(()=>{})},900)};
@@ -110,7 +110,7 @@ async function shell(){
 
 async function loadConversations(){
  try{
-  const session=await api('/account/session');historyLocked=session.historyLocked;
+  await api('/account/session');
   await refreshInbox();
   if(conversation)await sync();
   connectRealtime();
@@ -141,7 +141,7 @@ async function refreshInbox(preferred){
   conversation=null;
   $('peer').textContent='Conversations';
   $('avatar').textContent='–';
-  $('composer').hidden=$('chatActions').hidden=$('history').hidden=true;
+  $('composer').hidden=$('chatActions').hidden=true;
   $('status').textContent='Connected';
   $('timeline').innerHTML='<div class="empty"><img src="/mark.svg" alt=""><h3>No conversations yet</h3><p>Find a member and send a message request to start chatting.</p><button id="emptyFind" type="button" class="primary">Find people</button></div>';
   button('emptyFind',findPeople);
@@ -188,7 +188,6 @@ async function select(id){
  clearTimeout(typingTimer);typingTimer=null;readKey=null;
  $('text').value=$('file').value='';
  $('composer').hidden=$('chatActions').hidden=false;
- $('history').hidden=!historyLocked;
  $('status').textContent='Connecting…';
  $('timeline').innerHTML='<div class="empty" role="status">Loading messages…</div>';
  renderPending();
@@ -420,7 +419,7 @@ let readKey;
 function markRead(){if(document.hidden||!conversation)return;const list=ordered();const last=list.at(-1);if(last&&last.id!==readKey){readKey=last.id;api('/conversations/'+conversation+'/read','PUT',{message:last.id}).catch(()=>readKey=null)}}
 let syncing=false,changingPassword=false;
 async function tick(){if(syncing||changingPassword||!usr()||!$('timeline'))return;const token=pb.authStore.token;syncing=true;try{
- const s=await api('/account/session');if(historyLocked!==s.historyLocked){historyLocked=s.historyLocked;$('history').hidden=!conversation||!historyLocked;messages.clear();await sync()}
+ await api('/account/session');
  connectRealtime();
  if(!realtime.realtime.isConnected||Date.now()-lastInboxRefresh>30000)await refreshInbox();
  if(conversation&&!document.hidden)await api('/conversations/'+conversation+'/presence','PUT',{typing:false});
@@ -533,7 +532,6 @@ function editProfile(){
   showAvatar($('avatarPreview'),$('removePhoto').checked?null:me,value('profileName')||personName(me,'Your profile'));
  };
 }
-async function unlock(){modal('Unlock earlier messages','<p class="notice">We’ll send a one-time code to the email on your account.</p>'+submit('Send a code'),async()=>{await api('/account/history/request','POST',{});modal('Enter your email code',codeField()+submit('Unlock history'),async()=>{await api('/account/history/confirm','POST',{code:value('code')});$('modal').close();await tick();toast('Earlier messages unlocked.')})})}
 async function push(){
  if(!('serviceWorker' in navigator)||!('PushManager' in window))throw Error('This browser does not support Web Push.');
  const config=await api('/push');if(!config.webVapidPublicKey)throw Error('Web Push is unavailable.');

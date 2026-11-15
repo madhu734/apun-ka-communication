@@ -9,7 +9,7 @@ One Git-backed Coolify Docker Compose application, **Apun Ka Communication**, in
 
 ## Accounts and email
 
-Provision each account with a unique mailbox that can receive mail. The account must have access to that mailbox to unlock earlier messages on a new browser or phone. New sign-ins rotate the session token and revoke the previous token without deleting data. A changed installation ID locks messages created before the sign-in until the user enters the emailed code. Account email changes and password reset links open the web app directly. OTP recovery and history unlock issue separate six-digit codes.
+Use an email inbox you can access for password recovery. Each account supports two concurrent device sessions. A third device signs out the oldest device without removing messages or media. Password reset and email change links open the web app, and password recovery is also available by six-digit email code.
 
 Set `SMTP_USERNAME` and `SMTP_PASSWORD` in the server environment. Gmail uses TLS on port 465 and the display name is Apun Ka Communication. New-device alerts for app users are disabled. PocketBase encrypts its persisted settings with `PB_SETTINGS_KEY` (32 characters). Keep that value with the server settings outside PocketBase backups. Restored instances need the same key and must receive `--encryptionEnv=PB_SETTINGS_KEY`. After replacing a Gmail app password, update the environment file and recreate the backend.
 

@@ -1,12 +1,10 @@
 # Apun Ka Communication client API
 
-PocketBase origin is `https://pb.tmadhu.me`. JSON uses UTF-8. Pass the PocketBase auth token in `Authorization` on authenticated requests. Sign in with `POST /api/collections/users/auth-with-password`, body `{"identity":"email","password":"…"}`, and `X-App-Device` set to a stable random installation ID (24 to 128 characters, such as a UUID). A fresh sign-in revokes the preceding session. Refresh via `POST /api/collections/users/auth-refresh` and clear local session data and media on revocation. Accounts can be created through web signup or by an administrator.
+PocketBase origin is `https://pb.tmadhu.me`. JSON uses UTF-8. Pass the PocketBase auth token in `Authorization` on authenticated requests. Sign in with `POST /api/collections/users/auth-with-password`, body `{"identity":"email","password":"…"}`, and `X-App-Device` set to a stable random installation ID (24 to 128 characters, such as a UUID). The two newest distinct device sign-ins stay active. A new third device revokes the oldest sign-in. Refresh preserves device ordering. Refresh via `POST /api/collections/users/auth-refresh` and clear local session data and media on revocation. Accounts can be created through web signup or by an administrator.
 
 | Account route | Use |
 |---|---|
-| GET `/api/app/account/session` | Returns `{historyLocked:boolean}`. While locked, old messages, reactions, attachments and call history are filtered at the server. |
-| POST `/api/app/account/history/request` | Signed in, empty body. Send a code to the current user's email. |
-| POST `/api/app/account/history/confirm` | Signed in, `{code}`. A valid code unlocks history. Refetch messages and reactions. |
+| GET `/api/app/account/session` | Returns `{active:true}` when the current device session is valid. A revoked device session receives 401. |
 | POST `/api/app/account/recovery/request` | Guest route, `{email}`. Send a password recovery code. |
 | POST `/api/app/account/recovery/confirm` | Guest route, `{email,code,password,passwordConfirm}`. On success sign in with the new password. |
 | POST `/api/app/account/logout` | Signed in, empty body. Revokes the current session. |

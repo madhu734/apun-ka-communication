@@ -73,13 +73,6 @@ func visibleCall(app core.App, id, user string) (*core.Record, error) {
 	if user != call.GetString("caller") && user != call.GetString("receiver") {
 		return nil, errMissing
 	}
-	who, err := app.FindRecordById("users", user)
-	if err != nil {
-		return nil, err
-	}
-	if !historyAllows(who, call) {
-		return nil, errMissing
-	}
 	return call, nil
 }
 
@@ -122,6 +115,7 @@ func (s *service) startCall(e *core.RequestEvent) error {
 		expires := time.Now().Add(ringTime)
 		call.Set("conversation", conv.Id)
 		call.Set("caller", e.Auth.Id)
+		call.Set("caller_session", requestSession(e).Id)
 		call.Set("receiver", receiver)
 		call.Set("room", "call-"+security.RandomString(32))
 		call.Set("kind", body.Kind)
@@ -161,16 +155,17 @@ func (s *service) changeCall(action string) func(*core.RequestEvent) error {
 				if !receiver {
 					return errMissing
 				}
-				if (status == "accepted" || status == "connected") && body.DeviceID == call.GetString("accepted_device") {
+				if (status == "accepted" || status == "connected") && requestSession(e).Id == call.GetString("receiver_session") {
 					return nil
 				}
 				if status != "ringing" || !now.Before(call.GetDateTime("ring_expires_at").Time()) {
 					return errConflict
 				}
-				if len(body.DeviceID) > 80 {
+				if body.DeviceID != requestSession(e).GetString("device") {
 					return errInvalid
 				}
 				call.Set("accepted_device", body.DeviceID)
+				call.Set("receiver_session", requestSession(e).Id)
 				call.Set("status", "accepted")
 				call.Set("accepted_at", now)
 			case "reject":
@@ -235,7 +230,12 @@ func (s *service) callToken(e *core.RequestEvent) error {
 	if status := call.GetString("status"); status != "accepted" && status != "connected" {
 		return apiError(e, errConflict)
 	}
-	if e.Auth.Id == call.GetString("receiver") && call.GetString("accepted_device") != body.DeviceID {
+	session := requestSession(e)
+	expectedSession := call.GetString("caller_session")
+	if e.Auth.Id == call.GetString("receiver") {
+		expectedSession = call.GetString("receiver_session")
+	}
+	if expectedSession != session.Id || body.DeviceID != session.GetString("device") {
 		return apiError(e, errConflict)
 	}
 	room := call.GetString("room")

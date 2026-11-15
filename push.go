@@ -83,6 +83,9 @@ func (s *service) registerDevice(e *core.RequestEvent) error {
 	}
 	var device *core.Record
 	err := s.app.RunInTransaction(func(tx core.App) error {
+		if _, err := tx.FindRecordById("app_sessions", requestSession(e).Id); err != nil {
+			return errConflict
+		}
 		var err error
 		device, err = tx.FindFirstRecordByFilter("devices", "platform = {:p} && destination = {:d}", dbx.Params{"p": body.Platform, "d": dest})
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -107,6 +110,7 @@ func (s *service) registerDevice(e *core.RequestEvent) error {
 		device.Set("platform", body.Platform)
 		device.Set("destination", dest)
 		device.Set("user", e.Auth.Id)
+		device.Set("session", requestSession(e).Id)
 		device.Set("p256dh", body.P256DH)
 		device.Set("auth_secret", body.Auth)
 		return tx.Save(device)

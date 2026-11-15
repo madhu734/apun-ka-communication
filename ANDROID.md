@@ -1,8 +1,8 @@
 # Native Android build prompt
 
-Display the product as Apun Ka Communication. Send the persistent installation UUID in the `X-App-Device` header on password sign-in. See API.md for the current history unlock and session contract.
+Display the product as Apun Ka Communication. Send the persistent installation UUID in the `X-App-Device` header on password sign-in. See API.md for the two-device session contract.
 
-Build the native Mandy Chat client in Kotlin and Jetpack Compose. Use application ID `me.tmadhu.mandychat`, Firebase project `mandy-chat`, the LiveKit Android SDK, and Jetpack Core-Telecom for native call orchestration. Read and implement API.md. Keep UI, repositories and call control separate. Use an Android Keystore-protected session store and a stable, random per-install device ID. Preserve active call state across recreation. Collect notification and media permissions contextually.
+Build the native Mandy Chat client in Kotlin and Jetpack Compose. Use application ID `me.tmadhu.mandychat`, Firebase project `mandy-chat`, the LiveKit Android SDK, and Jetpack Core-Telecom for native call orchestration. Read and implement API.md. Keep UI, repositories and call control separate. Use an Android Keystore-protected session store and a stable, random per-install device ID. Preserve active call state across recreation. A third device signs out the oldest device. All authorized devices can read existing chat history. Collect notification and media permissions contextually.
 
 Deliver email/password sign-in and the same conversation, message, image, voice note, edit, reply, reaction, presence and read behavior as the web client. Implement the PocketBase SSE protocol with an authenticated client and REST resync on reconnect. Paginate at 30 messages and lazy-load protected files. Reuse a client message ID on resend. On sign-out, clear tokens and remove the old push registration. Handle FCM token rotation by replacing the registration.
 

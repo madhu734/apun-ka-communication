@@ -69,9 +69,6 @@ func (s *service) sendMessage(e *core.RequestEvent) error {
 			if msg.GetString("conversation") != conv.Id {
 				return errConflict
 			}
-			if !historyAllows(e.Auth, msg) {
-				return errMissing
-			}
 			status = 200
 			return nil
 		}
@@ -80,7 +77,7 @@ func (s *service) sendMessage(e *core.RequestEvent) error {
 		}
 		if body.ReplyTo != "" {
 			reply, err := tx.FindRecordById("messages", body.ReplyTo)
-			if err != nil || reply.GetString("conversation") != conv.Id || !historyAllows(e.Auth, reply) {
+			if err != nil || reply.GetString("conversation") != conv.Id {
 				return errInvalid
 			}
 		}
@@ -133,19 +130,7 @@ func messageInConversation(app core.App, id, user string) (*core.Record, error) 
 	if _, err = memberRecord(app, msg.GetString("conversation"), user); err != nil {
 		return nil, err
 	}
-	who, err := app.FindRecordById("users", user)
-	if err != nil {
-		return nil, err
-	}
-	if !historyAllows(who, msg) {
-		return nil, errMissing
-	}
 	return msg, nil
-}
-
-func historyAllows(user, record *core.Record) bool {
-	cutoff := user.GetDateTime("history_cutoff")
-	return cutoff.IsZero() || record.GetDateTime("created").Time().After(cutoff.Time())
 }
 
 func (s *service) editMessage(e *core.RequestEvent) error {
