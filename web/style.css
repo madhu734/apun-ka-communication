@@ -45,6 +45,13 @@ dialog{border:1px solid var(--line);border-radius:22px;padding:25px;background:v
 .call-controls button.call-icon[aria-pressed="false"]:hover{background:#d7e8da}
 .call-controls button.call-icon.hang{background:#b63043;color:white}
 .call-controls button.call-icon.hang:hover{background:#d13a4f}
+#videoFocus{position:absolute;inset:0;z-index:1;padding:0;touch-action:manipulation}
+#videoFocus:focus-visible{outline:2px solid #d8ef92;outline-offset:-4px}
+.stage .incall{z-index:2}
+#call.call-focus{inset:0;width:auto;padding:0;border:0;border-radius:0;background:#101713}
+#call.call-focus .stage{height:100%;border-radius:0;background:inherit}
+#call.call-focus :is(.callhead,.call-controls,.incall,#local){display:none}
+#app:has(#call.call-focus:not([hidden])) .shell{visibility:hidden}
 @media(max-width:700px){.bar #avatar{display:grid;width:32px;height:32px;border-radius:11px}.contact .circle{display:grid;width:21px;height:21px;border-radius:7px;font-size:9px}.contact{gap:5px}}
 .chat-nav-actions{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px}
 .chat-nav-actions button,.member-row button,.request-controls button[data-action="remove"]{padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--paper);color:var(--green);font-size:12px;font-weight:750}

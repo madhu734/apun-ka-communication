@@ -585,7 +585,7 @@ async function applyCall(r){
   const incoming=r.receiver===usr();
   renderCallId=null;
   if(host.dataset.phase!==r.id){
-   host.dataset.phase=r.id;host.classList.remove('min');
+   host.dataset.phase=r.id;host.classList.remove('min','call-focus');
    host.innerHTML=`<div class="callhead"><strong>${incoming?'Incoming':'Calling'} · ${escape(peer)}</strong><span>${escape(r.kind)} call</span></div><div class="call-controls">${incoming?'<button id="accept">Accept</button><button id="decline" class="hang">Decline</button>':'<button id="decline" class="hang">Cancel</button>'}</div>`;
    button('accept',async()=>{const item=await api('/calls/'+r.id+'/accept','POST',{deviceId:device});await applyCall(item)});
    button('decline',async()=>{await applyCall(await api('/calls/'+r.id+(incoming?'/reject':'/end'),'POST',{}))});
@@ -593,8 +593,22 @@ async function applyCall(r){
   }return;
  }
  if(renderCallId===r.id)return;
- renderCallId=r.id;host.dataset.phase='';host.classList.remove('min');manualMode='auto';
- host.innerHTML=`<div class="callhead"><strong>${escape(peer)}</strong><span id="callState">Connecting…</span><button id="collapse" aria-label="Minimize call" aria-expanded="true" aria-controls="callStage">−</button></div><div class="stage" id="callStage"><div id="remote"></div><div id="local"></div><form id="incallForm" class="incall" hidden><div id="recent"></div><div class="row" style="flex-wrap:nowrap"><input id="incallText" placeholder="Message during call" aria-label="Message during call"><button type="submit">Send</button></div></form></div><div id="audioMount"></div><div class="call-controls">${callToggle('mute','mic','Microphone','Unmute microphone')}${callToggle('camera','video','Camera','Turn camera on')}<button class="call-extra" id="flip">Flip</button><button class="call-extra" id="share">Share screen</button><button class="call-extra" id="inChat">Chat</button><select class="call-extra" aria-label="Call quality" id="quality"><option value="auto">Auto HD</option><option value="smooth">Smooth</option><option value="audio">Audio only</option></select><button type="button" class="call-icon hang" id="hang" title="End call" aria-label="End call">${iconGraphic('hangup')}</button></div>`;
+ renderCallId=r.id;host.dataset.phase='';host.classList.remove('min','call-focus');manualMode='auto';
+ const focusButton=r.kind==='video'?'<button type="button" id="videoFocus" aria-label="Video focus" aria-pressed="false"></button>':'';
+ host.innerHTML=`<div class="callhead"><strong>${escape(peer)}</strong><span id="callState">Connecting…</span><button id="collapse" aria-label="Minimize call" aria-expanded="true" aria-controls="callStage">−</button></div><div class="stage" id="callStage"><div id="remote"></div><div id="local"></div>${focusButton}<form id="incallForm" class="incall" hidden><div id="recent"></div><div class="row" style="flex-wrap:nowrap"><input id="incallText" placeholder="Message during call" aria-label="Message during call"><button type="submit">Send</button></div></form></div><div id="audioMount"></div><div class="call-controls">${callToggle('mute','mic','Microphone','Unmute microphone')}${callToggle('camera','video','Camera','Turn camera on')}<button class="call-extra" id="flip">Flip</button><button class="call-extra" id="share">Share screen</button><button class="call-extra" id="inChat">Chat</button><select class="call-extra" aria-label="Call quality" id="quality"><option value="auto">Auto HD</option><option value="smooth">Smooth</option><option value="audio">Audio only</option></select><button type="button" class="call-icon hang" id="hang" title="End call" aria-label="End call">${iconGraphic('hangup')}</button></div>`;
+ const focus=$('videoFocus');
+ if(focus){
+  focus.onclick=()=>{
+   focus.setAttribute('aria-pressed',String(host.classList.toggle('call-focus')));
+   focus.focus({preventScroll:true});
+  };
+  focus.onkeydown=event=>{
+   if(event.key==='Escape'&&host.classList.contains('call-focus')){
+    event.preventDefault();
+    focus.click();
+   }
+  };
+ }
  button('collapse',()=>{
   const minimized=host.classList.toggle('min'),control=$('collapse');
   control.textContent=minimized?'+':'−';
