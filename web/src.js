@@ -12,7 +12,11 @@ const $=id=>document.getElementById(id);
 const app=$('app');
 const logo='<div class="logo"><img src="/mark.svg" alt=""><div>Apun Ka<span class="sub">Communication</span></div></div>';
 const glyphs={phone:'<path d="M4 4h4l2 5-3 2a14 14 0 0 0 6 6l2-3 5 2v4c-9 2-18-7-16-16z"/>',video:'<rect x="3" y="6" width="12" height="12" rx="2"/><path d="m15 10 6-3v10l-6-3"/>',attach:'<path d="m8 13 7-7a3 3 0 1 1 4 4l-9 9a5 5 0 0 1-7-7l8-8m-4 9a1.5 1.5 0 0 0 2 2l7-7"/>',mic:'<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M6 11a6 6 0 0 0 12 0m-6 6v4m-3 0h6"/>',gear:'<circle cx="12" cy="12" r="3"/><path d="M12 3v3m0 12v3m-9-9h3m12 0h3m-15-6 2 2m8 8 2 2m0-12-2 2m-8 8-2 2"/>'};
-const icon=(id,name,label)=>`<button type="button" class="icon" id="${id}" title="${label}" aria-label="${label}"><svg viewBox="0 0 24 24" aria-hidden="true">${glyphs[name]}</svg></button>`;
+glyphs.micOff='<path d="m3 3 18 18M9 9v3a3 3 0 0 0 5 2m1-4V5a3 3 0 0 0-5.8-1M6 11a6 6 0 0 0 10 4.5M18 11v1m-6 5v4m-3 0h6"/>';
+glyphs.videoOff='<path d="m3 3 18 18M9 6h4a2 2 0 0 1 2 2v3m0-1 6-3v10l-3-1.5M3 8v8a2 2 0 0 0 2 2h8a2 2 0 0 0 1.5-.7"/>';
+glyphs.hangup='<path d="M3 12a15 15 0 0 1 18 0v4h-5v-3a9 9 0 0 0-8 0v3H3z"/>';
+const iconGraphic=name=>`<svg viewBox="0 0 24 24" aria-hidden="true">${glyphs[name]}</svg>`;
+const icon=(id,name,label)=>`<button type="button" class="icon" id="${id}" title="${label}" aria-label="${label}">${iconGraphic(name)}</button>`;
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const usr=()=>pb.authStore.record?.id;
 const api=(path,method='GET',body)=>pb.send('/api/app'+path,{method,body});
@@ -552,6 +556,7 @@ async function voice(){
 const callActive=['ringing','accepted','connected'];
 let Room,RoomEvent,Track,VideoQuality,VideoPresets,ConnectionQuality;
 let renderCallId,callWait,manualMode='auto';
+const callToggle=(id,glyph,label,title)=>`<button type="button" class="call-icon" id="${id}" aria-label="${label}" title="${title}" aria-pressed="false" disabled>${iconGraphic(glyph+'Off')}</button>`;
 async function refreshCall(){
  if(!usr())return;
  const who=usr();
@@ -589,7 +594,7 @@ async function applyCall(r){
  }
  if(renderCallId===r.id)return;
  renderCallId=r.id;host.dataset.phase='';host.classList.remove('min');manualMode='auto';
- host.innerHTML=`<div class="callhead"><strong>${escape(peer)}</strong><span id="callState">Connecting…</span><button id="collapse" aria-label="Minimize call" aria-expanded="true" aria-controls="callStage">−</button></div><div class="stage" id="callStage"><div id="remote"></div><div id="local"></div><form id="incallForm" class="incall" hidden><div id="recent"></div><div class="row" style="flex-wrap:nowrap"><input id="incallText" placeholder="Message during call" aria-label="Message during call"><button type="submit">Send</button></div></form></div><div id="audioMount"></div><div class="call-controls"><button id="mute" aria-label="Microphone" aria-pressed="false" disabled>Mic off</button><button id="camera" aria-label="Camera" aria-pressed="false" disabled>Camera off</button><button class="call-extra" id="flip">Flip</button><button class="call-extra" id="share">Share screen</button><button class="call-extra" id="inChat">Chat</button><select class="call-extra" aria-label="Call quality" id="quality"><option value="auto">Auto HD</option><option value="smooth">Smooth</option><option value="audio">Audio only</option></select><button class="hang" id="hang">End call</button></div>`;
+ host.innerHTML=`<div class="callhead"><strong>${escape(peer)}</strong><span id="callState">Connecting…</span><button id="collapse" aria-label="Minimize call" aria-expanded="true" aria-controls="callStage">−</button></div><div class="stage" id="callStage"><div id="remote"></div><div id="local"></div><form id="incallForm" class="incall" hidden><div id="recent"></div><div class="row" style="flex-wrap:nowrap"><input id="incallText" placeholder="Message during call" aria-label="Message during call"><button type="submit">Send</button></div></form></div><div id="audioMount"></div><div class="call-controls">${callToggle('mute','mic','Microphone','Unmute microphone')}${callToggle('camera','video','Camera','Turn camera on')}<button class="call-extra" id="flip">Flip</button><button class="call-extra" id="share">Share screen</button><button class="call-extra" id="inChat">Chat</button><select class="call-extra" aria-label="Call quality" id="quality"><option value="auto">Auto HD</option><option value="smooth">Smooth</option><option value="audio">Audio only</option></select><button type="button" class="call-icon hang" id="hang" title="End call" aria-label="End call">${iconGraphic('hangup')}</button></div>`;
  button('collapse',()=>{
   const minimized=host.classList.toggle('min'),control=$('collapse');
   control.textContent=minimized?'+':'−';
@@ -620,9 +625,13 @@ async function stopMedia(){const old=room;room=null;if(old)await old.disconnect(
 function updateCallControls(active){
  if(room!==active||!$('mute')||!$('camera'))return;
  const participant=active.localParticipant;
- for(const [id,label,on] of [['mute','Mic',participant.isMicrophoneEnabled],['camera','Camera',participant.isCameraEnabled]]){
+ for(const [id,glyph,on,title] of [
+  ['mute','mic',participant.isMicrophoneEnabled,participant.isMicrophoneEnabled?'Mute microphone':'Unmute microphone'],
+  ['camera','video',participant.isCameraEnabled,participant.isCameraEnabled?'Turn camera off':'Turn camera on']
+ ]){
   const control=$(id);
-  control.textContent=label+(on?' on':' off');
+  control.querySelector('svg').innerHTML=glyphs[on?glyph:glyph+'Off'];
+  control.title=title;
   control.setAttribute('aria-pressed',String(on));
  }
 }
