@@ -1,7 +1,11 @@
 import PocketBase from 'pocketbase';
 import './style.css';
 
-const pb=new PocketBase(import.meta.env.VITE_PB_URL||'https://pb.tmadhu.me');
+const pocketBaseURL=import.meta.env.VITE_PB_URL||'https://pb.tmadhu.me';
+const appURL=location.hostname==='chat.tmadhu.me'&&!import.meta.env.VITE_PB_URL?location.origin:pocketBaseURL;
+const pb=new PocketBase(appURL);
+// The public PocketBase route streams events without the web proxy's buffering.
+const realtime=appURL===pocketBaseURL?pb:new PocketBase(pocketBaseURL,pb.authStore);
 pb.autoCancellation(false);
 const device=localStorage.akDevice||(localStorage.akDevice=crypto.randomUUID());
 const $=id=>document.getElementById(id);
@@ -19,7 +23,7 @@ let toastTimer,heartbeat,typingTimer,conversation,conversationList=[],people={},
 let mediaUrls=[];
 let chatRequests=[],inboxSequence=0,inboxFocus,inboxTimer,lastInboxRefresh=0;
 function toast(text){$('toast').textContent=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').textContent='',4500)}
-function reason(e){return e?.response?.message||e?.message||'Please try again.'}
+function reason(e){return e?.status===0&&!e.isAbort?'Could not connect. Check your connection and try again.':e?.response?.message||e?.message||'Please try again.'}
 function button(id,fn){const el=$(id);if(el)el.onclick=async()=>{try{await fn()}catch(e){toast(reason(e))}}}
 function form(id,fn){const el=$(id);el.onsubmit=async event=>{event.preventDefault();const b=el.querySelector('[type=submit]');if(b)b.disabled=true;el.querySelector('.error')?.replaceChildren();try{await fn()}catch(e){const box=el.querySelector('.error');if(box)box.textContent=reason(e);else toast(reason(e))}finally{if(b)b.disabled=false}}}
 const eye='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/><path class="eye-slash" d="m4 4 16 16"/></svg>';
@@ -104,8 +108,8 @@ async function loadConversations(){
  try{
   const session=await api('/account/session');historyLocked=session.historyLocked;
   await refreshInbox();
-  await subscribe();
   if(conversation)await sync();
+  connectRealtime();
   $('timeline').dataset.ready='true';
  }catch(e){if(e.status===401||e.status===403)return signout(true);$('status').textContent='Connection interrupted';toast(reason(e))}
 }
@@ -413,22 +417,47 @@ function markRead(){if(document.hidden||!conversation)return;const list=ordered(
 let syncing=false,changingPassword=false;
 async function tick(){if(syncing||changingPassword||!usr()||!$('timeline'))return;const token=pb.authStore.token;syncing=true;try{
  const s=await api('/account/session');if(historyLocked!==s.historyLocked){historyLocked=s.historyLocked;$('history').hidden=!conversation||!historyLocked;messages.clear();await sync()}
- if(!subscriptionOff.length){await loadConversations();return}
- if(!pb.realtime.isConnected||Date.now()-lastInboxRefresh>30000)await refreshInbox();
+ connectRealtime();
+ if(!realtime.realtime.isConnected||Date.now()-lastInboxRefresh>30000)await refreshInbox();
  if(conversation&&!document.hidden)await api('/conversations/'+conversation+'/presence','PUT',{typing:false});
- if(conversation){if(!pb.realtime.isConnected)await sync();await refreshCall()}
+ if(conversation){if(!realtime.realtime.isConnected)await sync();await refreshCall()}
 }catch(e){if((e.status===401||e.status===403)&&token===pb.authStore.token&&!changingPassword)await signout(true)}finally{syncing=false}}
+let subscriptionJob,subscriptionToken;
+function connectRealtime(){
+ if(!usr()||subscriptionJob)return;
+ if(subscriptionToken!==pb.authStore.token){
+  for(const off of subscriptionOff)off();
+  subscriptionOff=[];
+ }
+ if(subscriptionOff.length)return;
+ subscriptionJob=subscribe().catch(()=>{}).finally(()=>{subscriptionJob=null});
+}
 async function subscribe(){
- for(const off of subscriptionOff)off();subscriptionOff=[];
- try{for(const n of ['messages','conversation_members','message_reactions','calls','conversations','message_requests']){
-  const off=await col(n).subscribe('*',evt=>{const r=evt.record;
-   if(n==='conversations'||n==='message_requests'){scheduleInboxRefresh();return}
-   if(n==='calls'){if(r.caller===usr()||r.receiver===usr())applyCall(r).catch(e=>toast(reason(e)));return}
-   if(r.conversation!==conversation)return;
-   if(n==='messages'){if(evt.action==='delete')messages.delete(r.id);else messages.set(r.id,r);render();markRead()}
-   else{const list=n==='message_reactions'?reactions:membership;const i=list.findIndex(x=>x.id===r.id);if(i>=0)list.splice(i,1);if(evt.action!=='delete')list.push(r);if(n==='message_reactions')render();else updatePresence()}
-  });subscriptionOff.push(off)
- }}catch(e){for(const off of subscriptionOff)off();subscriptionOff=[];throw e}
+ const token=pb.authStore.token,subscribed=[];
+ try{
+  for(const n of ['messages','conversation_members','message_reactions','calls','conversations','message_requests']){
+   if(pb.authStore.token!==token)return;
+   subscribed.push(await realtime.collection(n).subscribe('*',evt=>{
+    if(pb.authStore.token!==token)return;
+    const r=evt.record;
+    if(n==='conversations'||n==='message_requests'){scheduleInboxRefresh();return}
+    if(n==='calls'){if(r.caller===usr()||r.receiver===usr())applyCall(r).catch(e=>toast(reason(e)));return}
+    if(r.conversation!==conversation)return;
+    if(n==='messages'){if(evt.action==='delete')messages.delete(r.id);else messages.set(r.id,r);render();markRead()}
+    else{const list=n==='message_reactions'?reactions:membership;const i=list.findIndex(x=>x.id===r.id);if(i>=0)list.splice(i,1);if(evt.action!=='delete')list.push(r);if(n==='message_reactions')render();else updatePresence()}
+   }));
+  }
+  if(pb.authStore.token!==token)return;
+  subscribed.push(await realtime.realtime.subscribe('PB_CONNECT',()=>{
+   if(pb.authStore.token!==token)return;
+   scheduleInboxRefresh();
+   if(conversation)sync().catch(()=>{});
+  }));
+  if(pb.authStore.token!==token)return;
+  subscriptionOff=subscribed;subscriptionToken=token;
+  scheduleInboxRefresh();
+  if(conversation)sync().catch(()=>{});
+ }finally{if(subscriptionOff!==subscribed)for(const off of subscribed)off()}
 }
 function updatePresence(){const p=membership.find(m=>m.user!==usr());if(p&&$('status'))$('status').textContent=Date.parse(p.typing_until)>Date.now()?'Typing…':Date.parse(p.presence_until)>Date.now()?'Online':'Connected'}
 function modal(title,fields,action){
@@ -456,7 +485,9 @@ function settings(){
    $('modal').close();
   }finally{changingPassword=false}
   toast('Password updated.');
-  try{await subscribe();await sync()}catch(e){toast(reason(e))}
+  for(const off of subscriptionOff)off();subscriptionOff=[];
+  connectRealtime();
+  try{await sync()}catch(e){toast(reason(e))}
  }));
 }
 function editProfile(){
@@ -672,7 +703,6 @@ async function init(){
 document.addEventListener('visibilitychange',()=>{if(!document.hidden&&usr()){tick();sync().catch(()=>{})}});
 window.addEventListener('online',()=>{if(usr()){tick();sync().catch(()=>{})}});
 window.addEventListener('hashchange',init);
-pb.realtime.subscribe('PB_CONNECT',()=>{if(usr())scheduleInboxRefresh();if(conversation)sync().catch(()=>{})}).catch(()=>{});
 navigator.serviceWorker?.addEventListener('message',()=>{if(usr()){refreshCall().catch(()=>{});sync().catch(()=>{})}});
 init().catch(e=>{gate();toast(reason(e))});
 

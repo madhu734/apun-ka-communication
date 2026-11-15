@@ -207,6 +207,9 @@ func (s *service) registerAccount(e *core.RequestEvent) error {
 	user.Set("name", name)
 	user.Set("current_device", device)
 	if err := s.app.Save(user); err != nil {
+		if _, lookupErr := s.app.FindAuthRecordByEmail("users", email); lookupErr == nil {
+			return e.BadRequestError("This email already has an account. Sign in or reset your password.", nil)
+		}
 		return e.BadRequestError("Could not create an account with this email address.", err)
 	}
 	return apis.RecordAuthResponse(e, user, "", nil)
