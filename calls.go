@@ -192,7 +192,17 @@ func (s *service) changeCall(action string) func(*core.RequestEvent) error {
 					return nil
 				}
 			}
-			return tx.Save(call)
+			if err := tx.Save(call); err != nil {
+				return err
+			}
+			if action != "accept" {
+				for _, user := range []string{call.GetString("caller"), call.GetString("receiver")} {
+					if err := enqueue(tx, user, "call_ended", call.Id, time.Now().Add(2*time.Minute)); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
 		})
 		if err != nil {
 			return apiError(e, err)
@@ -384,6 +394,11 @@ func expireCalls(app core.App) error {
 		finish(call, "missed")
 		if err := app.Save(call); err != nil {
 			return err
+		}
+		for _, user := range []string{call.GetString("caller"), call.GetString("receiver")} {
+			if err := enqueue(app, user, "call_ended", call.Id, time.Now().Add(2*time.Minute)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

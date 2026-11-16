@@ -245,7 +245,7 @@ func (p *pushDelivery) deliver(ctx context.Context, d *core.Record, event, ref s
 		}
 		ttl := max(time.Second, time.Until(expires))
 		priority := "normal"
-		if event == "incoming_call" {
+		if event == "incoming_call" || event == "call_ended" || event == "new_message" {
 			priority = "high"
 		}
 		_, err := p.fcm.Send(ctx, &messaging.Message{
