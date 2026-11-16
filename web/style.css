@@ -80,3 +80,4 @@ dialog{border:1px solid var(--line);border-radius:22px;padding:25px;background:v
 }
 .deleted-message p{font-style:italic;color:var(--muted)}
 .bubble-actions button.message-more{font-size:16px;line-height:1;min-width:25px}
+.receipt{font-size:11px;letter-spacing:-2px;padding-right:2px;color:#758880}.receipt.seen{color:#168b87}

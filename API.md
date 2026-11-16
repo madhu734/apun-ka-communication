@@ -20,14 +20,14 @@ Use `GET /api/collections/{name}/records`, standard PocketBase filters, sort and
 | `users` | `id,name,avatar` and own account fields. Other participants' public names come from the people route. |
 | `conversations` | `id,members,created,updated`. Exactly two members. |
 | `message_requests` | `id,sender,recipient,note,created,updated`. Only the sender and recipient receive realtime events. |
-| `conversation_members` | `conversation,user,read_through,read_id,presence_until,typing_until`, plus timestamps. |
+| `conversation_members` | `conversation,user,read_through,read_id,delivered_through,delivered_id,presence_until,typing_until`, plus timestamps. |
 | `messages` | `id,conversation,sender,text,client_message_id,kind,attachment,attachment_bytes,reply_to,in_call,deleted_at,created,updated`. A set `deleted_at` means only a deletion placeholder remains. |
 | `message_hides` | `id,user,message,conversation,created,updated`. Private to the account that hid the message. Subscribe to `message_hides/*` to evict cached messages on the user's other devices. |
 | `message_reactions` | `id,conversation,message,user,emoji,created,updated`. One reaction per user per message. |
 | `calls` | `id,conversation,caller,receiver,kind,room,status,ring_expires_at,accepted_at,connected_at,ended_at,created,updated`. |
 | `devices` | Own `id,user,platform,created,updated`. |
  
-Messages and attachments are visible only to their conversation's members. For a file, call `POST /api/files/token` with session auth and fetch `/api/files/messages/{id}/{attachment}?token={token}`. Add `&thumb=400x0` for image previews. Refresh expired file tokens and keep the resulting URLs out of logs. The read cursor indicates read-through only. A successful POST means server receipt. The API does not report a separate per-device delivered receipt.
+Messages and attachments are visible only to their conversation's members. For a file, call `POST /api/files/token` with session auth and fetch `/api/files/messages/{id}/{attachment}?token={token}`. Add `&thumb=400x0` for image previews. Refresh expired file tokens and keep the resulting URLs out of logs. The read cursor indicates read-through only. A successful POST means server receipt. The delivered cursor tracks the latest message synced by the recipient account.
 
 ## Write operations
 
@@ -46,6 +46,7 @@ All paths below start at `/api/app`. Collection writes for chat, calls, membersh
 | DELETE `/messages/{id}?scope=me` | Hides the message for the current account across its devices, 204. Other participants keep their own copy. |
 | DELETE `/messages/{id}?scope=everyone` | Sender only. Returns the updated message with `deleted_at` and a placeholder, 200. Clears original text, attachment and reactions. Repeating either delete is safe. |
 | PUT `/reactions/{id}` | Message ID, `{emoji}`. Empty string removes. 204. |
+| PUT `/conversations/{id}/delivered` | `{message}` with message ID. Advances the recipient account delivery cursor, 204. |
 | PUT `/conversations/{id}/read` | `{message}` with message ID. 204. Cursor only advances. |
 | PUT `/conversations/{id}/presence` | `{typing: boolean}`. 204. Presence lasts 45 s, typing 8 s. Refresh only while visible. |
 | POST `/calls` | `{conversation,kind}` with `audio` or `video`. Returns call 201. Ring timeout 45 s. |

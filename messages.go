@@ -17,6 +17,18 @@ const mediaQuota = 2 << 30
 
 func init() { m.Register(messageDeletionSchema, nil, "1794780000_message_deletion.go") }
 
+func init() { m.Register(deliverySchema, nil, "1794850000_delivery.go") }
+
+func deliverySchema(app core.App) error {
+	members, err := app.FindCollectionByNameOrId("conversation_members")
+	if err != nil {
+		return err
+	}
+	members.Fields.Add(date("delivered_through"))
+	members.Fields.Add(&core.TextField{Name: "delivered_id", Max: 15})
+	return app.Save(members)
+}
+
 func messageDeletionSchema(app core.App) error {
 	messages, err := app.FindCollectionByNameOrId("messages")
 	if err != nil {
@@ -333,6 +345,14 @@ func (s *service) react(e *core.RequestEvent) error {
 }
 
 func (s *service) readCursor(e *core.RequestEvent) error {
+	return s.advanceCursor(e, "read_through", "read_id")
+}
+
+func (s *service) deliveredCursor(e *core.RequestEvent) error {
+	return s.advanceCursor(e, "delivered_through", "delivered_id")
+}
+
+func (s *service) advanceCursor(e *core.RequestEvent, timeField, idField string) error {
 	var body struct {
 		Message string `json:"message"`
 	}
@@ -353,12 +373,12 @@ func (s *service) readCursor(e *core.RequestEvent) error {
 			return err
 		}
 		when := msg.GetDateTime("created")
-		prev := member.GetDateTime("read_through")
-		if when.Time().Before(prev.Time()) || (when.Time().Equal(prev.Time()) && msg.Id <= member.GetString("read_id")) {
+		prev := member.GetDateTime(timeField)
+		if when.Time().Before(prev.Time()) || (when.Time().Equal(prev.Time()) && msg.Id <= member.GetString(idField)) {
 			return nil
 		}
-		member.Set("read_through", when)
-		member.Set("read_id", msg.Id)
+		member.Set(timeField, when)
+		member.Set(idField, msg.Id)
 		return tx.Save(member)
 	})
 	if err != nil {

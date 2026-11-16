@@ -186,7 +186,7 @@ async function select(id){
  if(!people[id])return;
  if(conversation===id){await sync();return}
  conversation=id;messages.clear();hiddenMessages.clear();reactions=[];membership=[];reply=null;attachment=null;pendingSend=null;older=true;
- clearTimeout(typingTimer);typingTimer=null;readKey=null;
+ clearTimeout(typingTimer);typingTimer=null;readKey=null;deliveredKey=null;
  $('text').value=$('file').value='';
  $('composer').hidden=$('chatActions').hidden=false;
  $('status').textContent='Connecting…';
@@ -303,7 +303,7 @@ async function sync(){
  if(conversation!==id)return;
  const [r,m]=await Promise.all([loadReactions(id),col('conversation_members').getFullList({filter:filter(id)}),syncMessageDeletions(id)]);
  if(conversation!==id)return;
- reactions=r;membership=m;render(true);markRead();
+ reactions=r;membership=m;render(true);markDelivered();markRead();
 }
 function clearMessageTools(id){
  if(reply?.id===id){reply=null;renderPending()}
@@ -373,12 +373,15 @@ function render(stick=false){
   $('status').textContent=Date.parse(near.typing_until)>now?'Typing…':Date.parse(near.presence_until)>now?'Online':'Connected';
  }
  box.innerHTML=(older&&items.length?'<button id="older" class="link">Load earlier messages</button>':'')+(items.length?items.map(m=>{
-  const own=m.sender===usr(),last=near&&(m.created<near.read_through||m.created===near.read_through&&m.id<=near.read_id);
+  const own=m.sender===usr();
+  const reached=(field,key)=>near?.[field]&&(m.created<near[field]||m.created===near[field]&&m.id<=near[key]);
+  const read=reached('read_through','read_id'),delivered=read||reached('delivered_through','delivered_id');
+  const receipt=own?` <span class="receipt ${read?'seen':''}" aria-label="${read?'Seen':delivered?'Delivered':'Sent'}" title="${read?'Seen':delivered?'Delivered':'Sent'}">${delivered?'✓✓':'✓'}</span>`:'';
   const clock=new Date(m.created).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
   const more='<button type="button" data-op="delete" class="message-more" aria-label="Delete message" title="Delete message">⋯</button>';
   if(m.deleted_at)return `<article class="message deleted-message ${own?'self':''}" data-id="${m.id}"><p>This message was deleted.</p><div class="bubble-actions"><small>${escape(clock)}</small>${more}</div></article>`;
   const replyMsg=messages.get(m.reply_to);
-  return `<article class="message ${own?'self':''}" data-id="${m.id}">${m.reply_to?`<div class="replyline">${escape(replyMsg?.text||'Earlier message')}</div>`:''}${m.kind==='image'?`<button data-op="file"><img data-preview="${m.id}" alt="Shared image" loading="lazy"></button>`:m.attachment?`<button class="link" data-op="file">${m.kind==='voice'?'Play voice note':'Play video'}</button>`:''}<p>${escape(m.text)}</p><div class="bubble-actions"><small>${escape(clock)}${own&&last?' · Read':''}</small><button data-op="reply">Reply</button>${own?'<button data-op="edit">Edit</button>':''}<button data-op="react" aria-label="Add reaction">React</button>${more}</div>${byMessage.has(m.id)?`<div class="reaction-chips">${reactionChips(byMessage.get(m.id))}</div>`:''}</article>`
+  return `<article class="message ${own?'self':''}" data-id="${m.id}">${m.reply_to?`<div class="replyline">${escape(replyMsg?.text||'Earlier message')}</div>`:''}${m.kind==='image'?`<button data-op="file"><img data-preview="${m.id}" alt="Shared image" loading="lazy"></button>`:m.attachment?`<button class="link" data-op="file">${m.kind==='voice'?'Play voice note':'Play video'}</button>`:''}<p>${escape(m.text)}</p><div class="bubble-actions"><small>${escape(clock)}${receipt}</small><button data-op="reply">Reply</button>${own?'<button data-op="edit">Edit</button>':''}<button data-op="react" aria-label="Add reaction">React</button>${more}</div>${byMessage.has(m.id)?`<div class="reaction-chips">${reactionChips(byMessage.get(m.id))}</div>`:''}</article>`
  }).join(''):'<div class="empty"><img src="/mark.svg" alt=""><h3>Say hello</h3><p>Send a message, share a voice note or start a call.</p></div>');
  button('older',async()=>{const id=conversation;await historyPage('older');const rows=await loadReactions(id);if(id!==conversation)return;reactions=rows;render();box.scrollTop=scroll+box.scrollHeight-previous});
  box.onclick=e=>{const target=e.target.closest('[data-op]');if(target)chatAction(target.dataset.op,target.closest('[data-id]').dataset.id,target.dataset.emoji).catch(err=>toast(reason(err)))};
@@ -479,7 +482,8 @@ async function send(text,inCall){
  rememberMessage(result);
  pendingSend=null;if(!inCall){reply=null;attachment=null;$('file').value='';renderPending()}render(true);
 }
-let readKey;
+let readKey,deliveredKey;
+function markDelivered(){if(!conversation)return;const last=ordered().filter(m=>m.sender!==usr()).at(-1);if(last&&last.id!==deliveredKey){deliveredKey=last.id;api('/conversations/'+conversation+'/delivered','PUT',{message:last.id}).catch(()=>deliveredKey=null)}}
 function markRead(){if(document.hidden||!conversation)return;const list=ordered();const last=list.at(-1);if(last&&last.id!==readKey){readKey=last.id;api('/conversations/'+conversation+'/read','PUT',{message:last.id}).catch(()=>readKey=null)}}
 let syncing=false,changingPassword=false;
 async function tick(){if(syncing||changingPassword||!usr()||!$('timeline'))return;const token=pb.authStore.token;syncing=true;try{
@@ -511,8 +515,8 @@ async function subscribe(){
     if(n==='calls'){if(r.caller===usr()||r.receiver===usr())applyCall(r).catch(e=>toast(reason(e)));return}
     if(r.conversation!==conversation)return;
     if(n==='message_hides'){if(evt.action==='create'){hideMessage(r.message);render();if(!messages.size&&older)sync().catch(()=>{})}return}
-    if(n==='messages'){if(evt.action==='delete'){messages.delete(r.id);clearMessageTools(r.id)}else rememberMessage(r);render();markRead()}
-    else{const list=n==='message_reactions'?reactions:membership;const i=list.findIndex(x=>x.id===r.id);if(i>=0)list.splice(i,1);if(evt.action!=='delete')list.push(r);if(n==='message_reactions')render();else updatePresence()}
+    if(n==='messages'){if(evt.action==='delete'){messages.delete(r.id);clearMessageTools(r.id)}else rememberMessage(r);render();markDelivered();markRead()}
+    else{const list=n==='message_reactions'?reactions:membership;const i=list.findIndex(x=>x.id===r.id);if(i>=0)list.splice(i,1);if(evt.action!=='delete')list.push(r);if(n==='message_reactions')render();else{updatePresence();render()}}
    }));
   }
   if(pb.authStore.token!==token)return;

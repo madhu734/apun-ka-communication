@@ -104,6 +104,7 @@ func main() {
 		auth.DELETE("/messages/{id}", cfg.deleteMessage)
 		auth.PUT("/reactions/{id}", cfg.react)
 		auth.PUT("/conversations/{id}/read", cfg.readCursor)
+		auth.PUT("/conversations/{id}/delivered", cfg.deliveredCursor)
 		auth.PUT("/conversations/{id}/presence", cfg.presence)
 		auth.GET("/conversations/{id}/people", cfg.people)
 		auth.POST("/devices", cfg.registerDevice)
