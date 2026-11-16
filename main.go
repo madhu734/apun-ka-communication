@@ -101,6 +101,7 @@ func main() {
 		auth.POST("/calls/{id}/token", cfg.callToken)
 		auth.POST("/messages", cfg.sendMessage).Bind(apis.BodyLimit(51 << 20))
 		auth.PATCH("/messages/{id}", cfg.editMessage)
+		auth.DELETE("/messages/{id}", cfg.deleteMessage)
 		auth.PUT("/reactions/{id}", cfg.react)
 		auth.PUT("/conversations/{id}/read", cfg.readCursor)
 		auth.PUT("/conversations/{id}/presence", cfg.presence)

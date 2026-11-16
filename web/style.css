@@ -78,3 +78,5 @@ dialog{border:1px solid var(--line);border-radius:22px;padding:25px;background:v
  .chat-nav-actions{margin-bottom:5px}
  .chat-nav .contacts{max-width:none}
 }
+.deleted-message p{font-style:italic;color:var(--muted)}
+.bubble-actions button.message-more{font-size:16px;line-height:1;min-width:25px}

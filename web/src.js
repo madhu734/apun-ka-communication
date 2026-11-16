@@ -25,6 +25,7 @@ const value=(id)=>$(id).value.trim();
 const deviceHeaders={'X-App-Device':device};
 let toastTimer,heartbeat,typingTimer,conversation,conversationList=[],people={},messages=new Map(),reactions=[],membership=[],subscriptionOff=[],call,room,callDialogBusy=false,reply,attachment,recording,qualityTimer,notificationDevice,pendingSend,older=true;
 let mediaUrls=[];
+const hiddenMessages=new Set();
 let chatRequests=[],inboxSequence=0,inboxFocus,inboxTimer,lastInboxRefresh=0;
 function toast(text){$('toast').textContent=text;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').textContent='',4500)}
 function reason(e){return e?.status===0&&!e.isAbort?'Could not connect. Check your connection and try again.':e?.response?.message||e?.message||'Please try again.'}
@@ -90,7 +91,7 @@ async function signout(remote=false){if(!remote){try{if(notificationDevice)await
  if(recording?.state==='recording'){recording.onstop=()=>recording.stream.getTracks().forEach(t=>t.stop());recording.stop()}
  fileToken='';fileTokenAt=0;fileTokenRequest=null;
  clearTimeout(inboxTimer);inboxSequence++;inboxFocus=null;conversationList=[];people={};chatRequests=[];lastInboxRefresh=0;
- for(const url of mediaUrls)URL.revokeObjectURL(url);mediaUrls=[];conversation=null;messages.clear();call=null;pendingSend=null;reply=null;attachment=null;notificationDevice=null;
+ for(const url of mediaUrls)URL.revokeObjectURL(url);mediaUrls=[];conversation=null;messages.clear();hiddenMessages.clear();call=null;pendingSend=null;reply=null;attachment=null;notificationDevice=null;
  pb.authStore.clear();gate();if(remote)toast('Your session ended. Sign in again to continue.');
 }
 
@@ -184,7 +185,7 @@ function renderContacts(){
 async function select(id){
  if(!people[id])return;
  if(conversation===id){await sync();return}
- conversation=id;messages.clear();reactions=[];membership=[];reply=null;attachment=null;pendingSend=null;older=true;
+ conversation=id;messages.clear();hiddenMessages.clear();reactions=[];membership=[];reply=null;attachment=null;pendingSend=null;older=true;
  clearTimeout(typingTimer);typingTimer=null;readKey=null;
  $('text').value=$('file').value='';
  $('composer').hidden=$('chatActions').hidden=false;
@@ -279,7 +280,7 @@ async function historyPage(mode='latest'){
  const page=await col('messages').getList(1,30,{sort:'-created,-id',filter:filter(id)+bounds,skipTotal:true});
  if(id!==conversation)return;
  if(mode==='older'||messages.size===0)older=page.items.length===30;
- page.items.forEach(m=>messages.set(m.id,m));
+ page.items.forEach(rememberMessage);
 }
 async function catchUp(id){
  const high=ordered().at(-1);
@@ -289,7 +290,7 @@ async function catchUp(id){
   const next=pb.filter('(created > {:date} || (created = {:date} && id > {:key}))',{date:after.created,key:after.id});
   const {items}=await col('messages').getList(1,30,{sort:'created,id',filter:filter(id)+' && '+next,skipTotal:true});
   if(id!==conversation)return;
-  for(const m of items)messages.set(m.id,m);
+  for(const m of items)rememberMessage(m);
   if(items.length<30)return;
   after=items.at(-1);
  }
@@ -300,9 +301,42 @@ async function sync(){
  if(conversation!==id)return;
  await historyPage();
  if(conversation!==id)return;
- const [r,m]=await Promise.all([loadReactions(id),col('conversation_members').getFullList({filter:filter(id)})]);
+ const [r,m]=await Promise.all([loadReactions(id),col('conversation_members').getFullList({filter:filter(id)}),syncMessageDeletions(id)]);
  if(conversation!==id)return;
  reactions=r;membership=m;render(true);markRead();
+}
+function clearMessageTools(id){
+ if(reply?.id===id){reply=null;renderPending()}
+ const dialog=$('modal');
+ if(dialog?.dataset.message===id){
+  dialog.close();
+  dialog.replaceChildren();
+  dialog.dataset.message='';
+ }
+}
+function hideMessage(id){
+ hiddenMessages.add(id);
+ messages.delete(id);
+ clearMessageTools(id);
+}
+function rememberMessage(message){
+ if(hiddenMessages.has(message.id))return;
+ const previous=messages.get(message.id);
+ if(previous?.deleted_at&&!message.deleted_at)return;
+ if(message.deleted_at&&!previous?.deleted_at)clearMessageTools(message.id);
+ messages.set(message.id,message);
+}
+async function syncMessageDeletions(id){
+ const first=ordered()[0];
+ if(!first)return;
+ const [hides,deleted]=await Promise.all([
+  col('message_hides').getFullList({filter:filter(id),fields:'message'}),
+  col('messages').getFullList({filter:filter(id)+' && deleted_at != "" && '+pb.filter('created >= {:date}',{date:first.created})})
+ ]);
+ if(conversation!==id)return;
+ hides.forEach(row=>hideMessage(row.message));
+ deleted.forEach(rememberMessage);
+ if(!messages.size&&older)await historyPage();
 }
 function ordered(){return [...messages.values()].sort((a,b)=>a.created.localeCompare(b.created)||a.id.localeCompare(b.id))}
 async function loadReactions(id){
@@ -341,8 +375,10 @@ function render(stick=false){
  box.innerHTML=(older&&items.length?'<button id="older" class="link">Load earlier messages</button>':'')+(items.length?items.map(m=>{
   const own=m.sender===usr(),last=near&&(m.created<near.read_through||m.created===near.read_through&&m.id<=near.read_id);
   const clock=new Date(m.created).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  const more='<button type="button" data-op="delete" class="message-more" aria-label="Delete message" title="Delete message">⋯</button>';
+  if(m.deleted_at)return `<article class="message deleted-message ${own?'self':''}" data-id="${m.id}"><p>This message was deleted.</p><div class="bubble-actions"><small>${escape(clock)}</small>${more}</div></article>`;
   const replyMsg=messages.get(m.reply_to);
-  return `<article class="message ${own?'self':''}" data-id="${m.id}">${m.reply_to?`<div class="replyline">${escape(replyMsg?.text||'Earlier message')}</div>`:''}${m.kind==='image'?`<button data-op="file"><img data-preview="${m.id}" alt="Shared image" loading="lazy"></button>`:m.attachment?`<button class="link" data-op="file">${m.kind==='voice'?'Play voice note':'Play video'}</button>`:''}<p>${escape(m.text)}</p><div class="bubble-actions"><small>${escape(clock)}${own&&last?' · Read':''}</small><button data-op="reply">Reply</button>${own?'<button data-op="edit">Edit</button>':''}<button data-op="react" aria-label="Add reaction">React</button></div>${byMessage.has(m.id)?`<div class="reaction-chips">${reactionChips(byMessage.get(m.id))}</div>`:''}</article>`
+  return `<article class="message ${own?'self':''}" data-id="${m.id}">${m.reply_to?`<div class="replyline">${escape(replyMsg?.text||'Earlier message')}</div>`:''}${m.kind==='image'?`<button data-op="file"><img data-preview="${m.id}" alt="Shared image" loading="lazy"></button>`:m.attachment?`<button class="link" data-op="file">${m.kind==='voice'?'Play voice note':'Play video'}</button>`:''}<p>${escape(m.text)}</p><div class="bubble-actions"><small>${escape(clock)}${own&&last?' · Read':''}</small><button data-op="reply">Reply</button>${own?'<button data-op="edit">Edit</button>':''}<button data-op="react" aria-label="Add reaction">React</button>${more}</div>${byMessage.has(m.id)?`<div class="reaction-chips">${reactionChips(byMessage.get(m.id))}</div>`:''}</article>`
  }).join(''):'<div class="empty"><img src="/mark.svg" alt=""><h3>Say hello</h3><p>Send a message, share a voice note or start a call.</p></div>');
  button('older',async()=>{const id=conversation;await historyPage('older');const rows=await loadReactions(id);if(id!==conversation)return;reactions=rows;render();box.scrollTop=scroll+box.scrollHeight-previous});
  box.onclick=e=>{const target=e.target.closest('[data-op]');if(target)chatAction(target.dataset.op,target.closest('[data-id]').dataset.id,target.dataset.emoji).catch(err=>toast(reason(err)))};
@@ -367,11 +403,39 @@ async function fileURL(m,thumb){return pb.files.getURL(m,m.attachment,{token:awa
 async function loadPreviews(box){for(const img of box.querySelectorAll('[data-preview]')){try{const url=await fileURL(messages.get(img.dataset.preview),true);if(img.isConnected)img.src=url}catch{}}}
 async function chatAction(op,id,emoji){
  const m=messages.get(id);if(!m)return;
+ if(op==='delete'){deleteOptions(m);return}
+ if(m.deleted_at)return;
  if(op==='reply'){reply=m;renderPending();$('text').focus();return}
- if(op==='edit'){modal('Edit message',`<label>Message<textarea id="editText" required></textarea></label>`+submit('Save edit'),async()=>{const result=await api('/messages/'+id,'PATCH',{text:value('editText')});messages.set(id,result);$('modal').close();render()});$('editText').value=m.text;return}
+ if(op==='edit'){modal('Edit message',`<label>Message<textarea id="editText" required></textarea></label>`+submit('Save edit'),async()=>{const result=await api('/messages/'+id,'PATCH',{text:value('editText')});if(conversation===m.conversation){rememberMessage(result);render()}$('modal').close()},id);$('editText').value=m.text;return}
  if(op==='react'){reactionPicker(id);return}
  if(op==='choose-reaction'){await setReaction(id,emoji);return}
- if(op==='file'){const src=escape(await fileURL(m,false));modal('Attachment',m.kind==='image'?`<img style="width:100%" src="${src}" alt="Shared image">`:m.kind==='voice'?`<audio controls autoplay src="${src}"></audio>`:`<video controls autoplay style="width:100%" src="${src}"></video>`)}
+ if(op==='file'){
+  const src=escape(await fileURL(m,false));
+  if(messages.get(id)?.attachment!==m.attachment)return;
+  modal('Attachment',m.kind==='image'?`<img style="width:100%" src="${src}" alt="Shared image">`:m.kind==='voice'?`<audio controls autoplay src="${src}"></audio>`:`<video controls autoplay style="width:100%" src="${src}"></video>`,undefined,id);
+ }
+}
+function deleteOptions(message){
+ const ownsMessage=message.sender===usr()&&!message.deleted_at;
+ const everyone=ownsMessage?'<button type="button" id="deleteForEveryone" class="danger">Delete for everyone</button>':'';
+ modal('Delete message',`<div class="account-actions"><button type="button" id="deleteForMe">Delete for me</button>${everyone}</div>`,undefined,message.id);
+ const remove=async scope=>{
+  const dialog=$('modal');
+  const controls=[...dialog.querySelectorAll('.account-actions button')];
+  controls.forEach(control=>control.disabled=true);
+  try{
+   const result=await api('/messages/'+message.id+'?scope='+scope,'DELETE');
+   if(dialog.dataset.message===message.id)dialog.close();
+   if(message.conversation!==conversation)return;
+   if(scope==='me'){
+    hideMessage(message.id);
+    if(!messages.size&&older)await historyPage();
+   }else rememberMessage(result);
+   render();
+  }finally{controls.forEach(control=>control.disabled=false)}
+ };
+ button('deleteForMe',()=>remove('me'));
+ button('deleteForEveryone',()=>remove('everyone'));
 }
 function reactionPicker(id){
  const mine=reactions.find(row=>row.message===id&&row.user===usr())?.emoji;
@@ -382,7 +446,7 @@ function reactionPicker(id){
   if(!emojiPattern.test(emoji)||Array.from(emoji).length>24)throw Error('Enter one emoji.');
   await setReaction(id,emoji);
   $('modal').close();
- });
+ },id);
  commonReactions.forEach(([emoji],i)=>button('emoji-'+i,async()=>{await setReaction(id,emoji);$('modal').close()}));
  button('removeReaction',async()=>{await setReaction(id,'');$('modal').close()});
 }
@@ -412,7 +476,7 @@ async function send(text,inCall){
  if(file){for(const [k,v] of Object.entries(fields))body.set(k,String(v));body.set('attachment',file)}
  const result=await api('/messages','POST',body);
  if(conversation!==fields.conversation||!$('pending'))return;
- messages.set(result.id,result);
+ rememberMessage(result);
  pendingSend=null;if(!inCall){reply=null;attachment=null;$('file').value='';renderPending()}render(true);
 }
 let readKey;
@@ -438,7 +502,7 @@ function connectRealtime(){
 async function subscribe(){
  const token=pb.authStore.token,subscribed=[];
  try{
-  for(const n of ['messages','conversation_members','message_reactions','calls','conversations','message_requests']){
+  for(const n of ['messages','message_hides','conversation_members','message_reactions','calls','conversations','message_requests']){
    if(pb.authStore.token!==token)return;
    subscribed.push(await realtime.collection(n).subscribe('*',evt=>{
     if(pb.authStore.token!==token)return;
@@ -446,7 +510,8 @@ async function subscribe(){
     if(n==='conversations'||n==='message_requests'){scheduleInboxRefresh();return}
     if(n==='calls'){if(r.caller===usr()||r.receiver===usr())applyCall(r).catch(e=>toast(reason(e)));return}
     if(r.conversation!==conversation)return;
-    if(n==='messages'){if(evt.action==='delete')messages.delete(r.id);else messages.set(r.id,r);render();markRead()}
+    if(n==='message_hides'){if(evt.action==='create'){hideMessage(r.message);render();if(!messages.size&&older)sync().catch(()=>{})}return}
+    if(n==='messages'){if(evt.action==='delete'){messages.delete(r.id);clearMessageTools(r.id)}else rememberMessage(r);render();markRead()}
     else{const list=n==='message_reactions'?reactions:membership;const i=list.findIndex(x=>x.id===r.id);if(i>=0)list.splice(i,1);if(evt.action!=='delete')list.push(r);if(n==='message_reactions')render();else updatePresence()}
    }));
   }
@@ -463,8 +528,9 @@ async function subscribe(){
  }finally{if(subscriptionOff!==subscribed)for(const off of subscribed)off()}
 }
 function updatePresence(){const p=membership.find(m=>m.user!==usr());if(p&&$('status'))$('status').textContent=Date.parse(p.typing_until)>Date.now()?'Typing…':Date.parse(p.presence_until)>Date.now()?'Online':'Connected'}
-function modal(title,fields,action){
+function modal(title,fields,action,messageId=''){
  const d=$('modal');if(d.open)d.close();
+ d.dataset.message=messageId;
  d.innerHTML=`<div class="row"><h2 style="flex:1">${escape(title)}</h2><button type="button" id="closeModal" aria-label="Close">✕</button></div><form id="dialogForm">${fields}</form>`;
  button('closeModal',()=>d.close());if(action)form('dialogForm',action);d.showModal();
 }

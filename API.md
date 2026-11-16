@@ -21,7 +21,8 @@ Use `GET /api/collections/{name}/records`, standard PocketBase filters, sort and
 | `conversations` | `id,members,created,updated`. Exactly two members. |
 | `message_requests` | `id,sender,recipient,note,created,updated`. Only the sender and recipient receive realtime events. |
 | `conversation_members` | `conversation,user,read_through,read_id,presence_until,typing_until`, plus timestamps. |
-| `messages` | `id,conversation,sender,text,client_message_id,kind,attachment,attachment_bytes,reply_to,in_call,created,updated`. |
+| `messages` | `id,conversation,sender,text,client_message_id,kind,attachment,attachment_bytes,reply_to,in_call,deleted_at,created,updated`. A set `deleted_at` means only a deletion placeholder remains. |
+| `message_hides` | `id,user,message,conversation,created,updated`. Private to the account that hid the message. Subscribe to `message_hides/*` to evict cached messages on the user's other devices. |
 | `message_reactions` | `id,conversation,message,user,emoji,created,updated`. One reaction per user per message. |
 | `calls` | `id,conversation,caller,receiver,kind,room,status,ring_expires_at,accepted_at,connected_at,ended_at,created,updated`. |
 | `devices` | Own `id,user,platform,created,updated`. |
@@ -42,6 +43,8 @@ All paths below start at `/api/app`. Collection writes for chat, calls, membersh
 | DELETE `/message-requests/{id}` | Sender cancels or recipient declines a pending request. Returns 204. |
 | POST `/messages` | JSON `{conversation,text,client_message_id,kind,reply_to?,in_call?}` for text. For media, send those fields as multipart with `attachment`; `kind` is `image`, `voice` or `video`. Returns record as 201, or 200 on retry with the same sender and client ID. |
 | PATCH `/messages/{id}` | `{text}`. Sender only. Returns record. |
+| DELETE `/messages/{id}?scope=me` | Hides the message for the current account across its devices, 204. Other participants keep their own copy. |
+| DELETE `/messages/{id}?scope=everyone` | Sender only. Returns the updated message with `deleted_at` and a placeholder, 200. Clears original text, attachment and reactions. Repeating either delete is safe. |
 | PUT `/reactions/{id}` | Message ID, `{emoji}`. Empty string removes. 204. |
 | PUT `/conversations/{id}/read` | `{message}` with message ID. 204. Cursor only advances. |
 | PUT `/conversations/{id}/presence` | `{typing: boolean}`. 204. Presence lasts 45 s, typing 8 s. Refresh only while visible. |

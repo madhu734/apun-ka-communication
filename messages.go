@@ -8,11 +8,59 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
+	m "github.com/pocketbase/pocketbase/migrations"
 	"github.com/pocketbase/pocketbase/tools/filesystem"
 )
 
 const attachmentMax = 50 << 20
 const mediaQuota = 2 << 30
+
+func init() { m.Register(messageDeletionSchema, nil, "1794780000_message_deletion.go") }
+
+func messageDeletionSchema(app core.App) error {
+	messages, err := app.FindCollectionByNameOrId("messages")
+	if err != nil {
+		return err
+	}
+	messages.Fields.Add(date("deleted_at"))
+	if err := app.Save(messages); err != nil {
+		return err
+	}
+	users, err := app.FindCollectionByNameOrId("users")
+	if err != nil {
+		return err
+	}
+	conversations, err := app.FindCollectionByNameOrId("conversations")
+	if err != nil {
+		return err
+	}
+	user := relation("user", users, true)
+	message := relation("message", messages, true)
+	conversation := relation("conversation", conversations, true)
+	user.CascadeDelete, message.CascadeDelete, conversation.CascadeDelete = true, true, true
+	hides := collection("message_hides", user, message, conversation)
+	hides.ListRule = ptr("@request.auth.id != '' && user = @request.auth.id && conversation.members.id ?= @request.auth.id")
+	hides.ViewRule = hides.ListRule
+	hides.AddIndex("idx_message_hide_user", true, "user,message", "")
+	hides.AddIndex("idx_message_hide_message", false, "message", "")
+	if err := app.Save(hides); err != nil {
+		return err
+	}
+	const memberRule = "@request.auth.id != '' && conversation.members.id ?= @request.auth.id"
+	const hideRule = "message_hides_via_message.user != @request.auth.id"
+	messages.ListRule = ptr(memberRule + " && " + hideRule)
+	messages.ViewRule = messages.ListRule
+	if err := app.Save(messages); err != nil {
+		return err
+	}
+	reactions, err := app.FindCollectionByNameOrId("message_reactions")
+	if err != nil {
+		return err
+	}
+	reactions.ListRule = ptr(memberRule + " && message.deleted_at = '' && message." + hideRule)
+	reactions.ViewRule = reactions.ListRule
+	return app.Save(reactions)
+}
 
 func (s *service) people(e *core.RequestEvent) error {
 	conv, err := memberRecord(s.app, e.Request.PathValue("id"), e.Auth.Id)
@@ -69,6 +117,9 @@ func (s *service) sendMessage(e *core.RequestEvent) error {
 			if msg.GetString("conversation") != conv.Id {
 				return errConflict
 			}
+			if err := checkMessageHide(tx, msg.Id, e.Auth.Id); err != nil {
+				return err
+			}
 			status = 200
 			return nil
 		}
@@ -76,8 +127,8 @@ func (s *service) sendMessage(e *core.RequestEvent) error {
 			return err
 		}
 		if body.ReplyTo != "" {
-			reply, err := tx.FindRecordById("messages", body.ReplyTo)
-			if err != nil || reply.GetString("conversation") != conv.Id {
+			reply, err := messageInConversation(tx, body.ReplyTo, e.Auth.Id)
+			if err != nil || reply.GetString("conversation") != conv.Id || !reply.GetDateTime("deleted_at").IsZero() {
 				return errInvalid
 			}
 		}
@@ -120,6 +171,14 @@ func (s *service) sendMessage(e *core.RequestEvent) error {
 }
 
 func messageInConversation(app core.App, id, user string) (*core.Record, error) {
+	msg, err := memberMessage(app, id, user)
+	if err != nil {
+		return nil, err
+	}
+	return msg, checkMessageHide(app, id, user)
+}
+
+func memberMessage(app core.App, id, user string) (*core.Record, error) {
 	msg, err := app.FindRecordById("messages", id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, errMissing
@@ -131,6 +190,77 @@ func messageInConversation(app core.App, id, user string) (*core.Record, error) 
 		return nil, err
 	}
 	return msg, nil
+}
+
+func checkMessageHide(app core.App, message, user string) error {
+	_, err := app.FindFirstRecordByFilter("message_hides", "user = {:u} && message = {:m}", dbx.Params{"u": user, "m": message})
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err == nil {
+		return errMissing
+	}
+	return err
+}
+
+func (s *service) deleteMessage(e *core.RequestEvent) error {
+	scope := e.Request.URL.Query().Get("scope")
+	if scope != "me" && scope != "everyone" {
+		return apiError(e, errInvalid)
+	}
+	var msg *core.Record
+	err := s.app.RunInTransaction(func(tx core.App) error {
+		var err error
+		msg, err = memberMessage(tx, e.Request.PathValue("id"), e.Auth.Id)
+		if err != nil {
+			return err
+		}
+		if scope == "me" {
+			if err := checkMessageHide(tx, msg.Id, e.Auth.Id); err != nil {
+				if errors.Is(err, errMissing) {
+					return nil
+				}
+				return err
+			}
+			hide, err := newRow(tx, "message_hides")
+			if err != nil {
+				return err
+			}
+			hide.Set("user", e.Auth.Id)
+			hide.Set("message", msg.Id)
+			hide.Set("conversation", msg.GetString("conversation"))
+			return tx.Save(hide)
+		}
+		if msg.GetString("sender") != e.Auth.Id {
+			return errMissing
+		}
+		if !msg.GetDateTime("deleted_at").IsZero() {
+			return nil
+		}
+		reactions, err := tx.FindRecordsByFilter("message_reactions", "message = {:m}", "", 0, 0, dbx.Params{"m": msg.Id})
+		if err != nil {
+			return err
+		}
+		for _, reaction := range reactions {
+			if err := tx.Delete(reaction); err != nil {
+				return err
+			}
+		}
+		msg.Set("text", "This message was deleted.")
+		msg.Set("kind", "text")
+		msg.Set("attachment", "")
+		msg.Set("attachment_bytes", 0)
+		msg.Set("reply_to", "")
+		msg.Set("deleted_at", time.Now())
+		return tx.Save(msg)
+	})
+	if err != nil {
+		return apiError(e, err)
+	}
+	if scope == "me" {
+		return e.NoContent(204)
+	}
+	return e.JSON(200, msg)
 }
 
 func (s *service) editMessage(e *core.RequestEvent) error {
@@ -147,7 +277,7 @@ func (s *service) editMessage(e *core.RequestEvent) error {
 		if err != nil {
 			return err
 		}
-		if msg.GetString("sender") != e.Auth.Id {
+		if msg.GetString("sender") != e.Auth.Id || !msg.GetDateTime("deleted_at").IsZero() {
 			return errMissing
 		}
 		msg.Set("text", body.Text)
@@ -170,6 +300,9 @@ func (s *service) react(e *core.RequestEvent) error {
 		msg, err := messageInConversation(tx, e.Request.PathValue("id"), e.Auth.Id)
 		if err != nil {
 			return err
+		}
+		if !msg.GetDateTime("deleted_at").IsZero() {
+			return errMissing
 		}
 		reaction, err := tx.FindFirstRecordByFilter("message_reactions", "message = {:m} && user = {:u}", dbx.Params{"m": msg.Id, "u": e.Auth.Id})
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
