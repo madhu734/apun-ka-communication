@@ -99,6 +99,7 @@ func main() {
 		auth.POST("/calls/{id}/reject", cfg.changeCall("reject"))
 		auth.POST("/calls/{id}/end", cfg.changeCall("end"))
 		auth.POST("/calls/{id}/token", cfg.callToken)
+		auth.PUT("/calls/{id}/secure", cfg.secureCall)
 		auth.POST("/messages", cfg.sendMessage).Bind(apis.BodyLimit(51 << 20))
 		auth.PATCH("/messages/{id}", cfg.editMessage)
 		auth.DELETE("/messages/{id}", cfg.deleteMessage)

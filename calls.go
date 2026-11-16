@@ -13,11 +13,60 @@ import (
 	"github.com/livekit/protocol/webhook"
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
+	m "github.com/pocketbase/pocketbase/migrations"
 	"github.com/pocketbase/pocketbase/tools/security"
 )
 
 const ringTime = 45 * time.Second
 const tokenLife = 5 * time.Minute
+
+func init() { m.Register(secureCallSchema, nil, "1794900000_secure_call.go") }
+
+func secureCallSchema(app core.App) error {
+	calls, err := app.FindCollectionByNameOrId("calls")
+	if err != nil {
+		return err
+	}
+	calls.Fields.Add(&core.TextField{Name: "secure_by", Max: 15})
+	return app.Save(calls)
+}
+
+func (s *service) secureCall(e *core.RequestEvent) error {
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := e.BindBody(&body); err != nil {
+		return apiError(e, errInvalid)
+	}
+	var call *core.Record
+	err := s.app.RunInTransaction(func(tx core.App) error {
+		var err error
+		call, err = visibleCall(tx, e.Request.PathValue("id"), e.Auth.Id)
+		if err != nil {
+			return err
+		}
+		if status := call.GetString("status"); status != "accepted" && status != "connected" {
+			return errConflict
+		}
+		owner := call.GetString("secure_by")
+		if body.Enabled {
+			if owner != "" && owner != e.Auth.Id {
+				return errConflict
+			}
+			call.Set("secure_by", e.Auth.Id)
+		} else {
+			if owner != "" && owner != e.Auth.Id {
+				return errConflict
+			}
+			call.Set("secure_by", "")
+		}
+		return tx.Save(call)
+	})
+	if err != nil {
+		return apiError(e, err)
+	}
+	return e.JSON(200, call)
+}
 
 var errMissing = errors.New("record unavailable")
 var errConflict = errors.New("state conflict")
